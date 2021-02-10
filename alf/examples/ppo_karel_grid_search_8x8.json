@@ -1,0 +1,34 @@
+{
+  "desc": "Grid Search Example For DDPG",
+  "use_gpu": true,
+  "gpus": [
+    0,
+    1
+  ],
+  "max_worker_num": 15,
+  "repeats": 5,
+  "parameters": {
+    "suite_karel_env.load.env_task": [
+      "'randomMaze'",
+      "'harvester'"
+    ],
+    "PPOLoss.importance_ratio_clipping": [
+      0.05,
+      0.1,
+      0.2
+    ],
+    "PPOLoss.normalize_advantages": [
+      "True"
+    ],
+    "PPOLoss.entropy_regularization": [
+      1e-1,
+      1e-2,
+      1e-3
+    ],
+    "TrainerConfig.num_updates_per_train_iter": [
+      4,
+      8,
+      16
+    ]
+  }
+}
