@@ -16,11 +16,16 @@ import functools
 import gin
 import numpy as np
 import random
+import torch
 
 from alf.environments import suite_gym
 from alf.environments import thread_environment, parallel_environment
 from alf.environments import alf_wrappers
 
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
 
 class UnwrappedEnvChecker(object):
     """
@@ -62,6 +67,9 @@ def create_environment(env_name='CartPole-v0',
                        num_parallel_environments=30,
                        nonparallel=False,
                        seed=None,
+                       prl_load_model=False,
+                       model_path=None,
+                       n_rollout_steps=20,
                        batched_wrappers=()):
     """Create a batched environment.
 
@@ -100,8 +108,33 @@ def create_environment(env_name='CartPole-v0',
         # Create and step the env in a separate thread. env `step` and `reset` must
         #   run in the same thread which the env is created in for some simulation
         #   environments such as social_bot(gazebo)
-        alf_env = thread_environment.ThreadEnvironment(lambda: env_load_fn(
-            env_name))
+        if prl_load_model:
+            from spirl.models.prl_bc_mdl import BCMdl
+            def _load_model(model_path):
+                ll_model_params = AttrDict(
+                    state_dim=5,
+                    action_dim=5,
+                    kl_div_weight=1.0,
+                    batch_size=128,
+                    nz_enc=128,
+                    nz_mid=128,
+                    input_res=16,
+                    #n_processing_layers=5,
+                    nz_vae=5,
+                    n_rollout_steps=n_rollout_steps,
+                    device='cpu'
+                )
+                model = BCMdl(ll_model_params)
+                model.load_state_dict(torch.load(model_path))
+                model.cpu()
+                model.eval()
+                return model
+            model =_load_model(model_path)
+            alf_env = thread_environment.ThreadEnvironment(lambda: env_load_fn(
+                env_name, model))
+        else:
+            alf_env = thread_environment.ThreadEnvironment(lambda: env_load_fn(
+                env_name))
         if seed is None:
             alf_env.seed(np.random.randint(0, np.iinfo(np.int32).max))
         else:
@@ -109,10 +142,37 @@ def create_environment(env_name='CartPole-v0',
     else:
         # flatten=True will use flattened action and time_step in
         #   process environments to reduce communication overhead.
-        alf_env = parallel_environment.ParallelAlfEnvironment(
-            [functools.partial(env_load_fn, env_name)] *
-            num_parallel_environments,
-            flatten=True)
+        if prl_load_model:
+            from spirl.models.prl_bc_mdl import BCMdl
+            def _load_model(model_path):
+                ll_model_params = AttrDict(
+                    state_dim=5,
+                    action_dim=5,
+                    kl_div_weight=1.0,
+                    batch_size=128,
+                    nz_enc=128,
+                    nz_mid=128,
+                    input_res=16,
+                    #n_processing_layers=5,
+                    nz_vae=5,
+                    n_rollout_steps=n_rollout_steps,
+                    device='cpu'
+                )
+                model = BCMdl(ll_model_params)
+                model.load_state_dict(torch.load(model_path))
+                model.cpu()
+                model.eval()
+                return model
+            model =_load_model(model_path)
+            alf_env = parallel_environment.ParallelAlfEnvironment(
+                [functools.partial(env_load_fn, env_name, model)] *
+                num_parallel_environments,
+                flatten=True)
+        else:
+            alf_env = parallel_environment.ParallelAlfEnvironment(
+                [functools.partial(env_load_fn, env_name)] *
+                num_parallel_environments,
+                flatten=True)
 
         if seed is None:
             alf_env.seed([

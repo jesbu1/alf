@@ -11,14 +11,13 @@ import numpy as np
 import gym
 from gym.spaces import Box
 import torch
-
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
 
 class KarelEnvWrapper(gym.Wrapper):
-    def __init__(self, env=None, op=[2, 0, 1], model_path=None):
+    def __init__(self, env=None, op=[2, 0, 1], model=None):
         """
         Transpose observation space for images
         """
@@ -34,40 +33,23 @@ class KarelEnvWrapper(gym.Wrapper):
                     obs_shape[self.op[2]]
                 ],
                 dtype=self.observation_space.dtype)
-        self.action_plan = []
-        self.model = self._load_model(model_path)
-        self.n_rollout_steps = 20
+        self.model = model
+        self.action_space = Box(low=np.array([-2] * 5), high = np.array([2] * 5))
 
     def step(self, action):
-        action_plan = self.generate_action_plan(action.unsqueeze(0))
+        action_plan = self.generate_action_plan(np.expand_dims(action, 0))
         accumulated_reward = 0
         done = False
-        while len(action_plan) != 0 and not done:
-            env_action = self.action_plan.pop(0)
+        while len(action_plan) > 0 and not done:
+            env_action = action_plan.pop(0)
             ob, reward, done, info = self.env.step(env_action)
             accumulated_reward += reward
         return self.observation(ob.astype(np.float32)), float(reward), done, {}
 
-    def _load_model(self, model_path):
-        ll_model_params = AttrDict(
-            state_dim=5,
-            action_dim=5,
-            kl_div_weight=1.0,
-            nz_enc=128,
-            nz_mid=128,
-            input_res=16,
-            #n_processing_layers=5,
-            nz_vae=5,
-            n_rollout_steps=self.n_rollout_steps,
-        )
-        model = BCMdl(ll_model_params)
-        model.load_state_dict(torch.load(model_path))
-        model.eval()
-        return model
-
     def generate_action_plan(self, z):
         with torch.no_grad():
-            action_plan = self.model.decode(z, z, self.n_rollout_steps)[0]
+            z = torch.from_numpy(z)
+            action_plan = self.model.decode(z, z, self.model.n_rollout_steps)[0]
             action_plan = action_plan.cpu().detach().tolist()
         return action_plan
 
@@ -83,6 +65,7 @@ class KarelEnvWrapper(gym.Wrapper):
 
 @gin.configurable
 def load(env_name,
+         model,
          env_id=None,
          discount=1.0,
          max_episode_steps=100,
@@ -96,7 +79,6 @@ def load(env_name,
          wall_prob=0.25,
          incorrect_marker_penalty=True,
          delayed_reward=True,
-         model_path='',
          wrap_with_process=False):
     """Loads the selected environment and wraps it with the specified wrappers.
     Note that by default a ``TimeLimit`` wrapper is used to limit episode lengths
@@ -145,6 +127,7 @@ def load(env_name,
     #                    help='width of karel maze')
 
 
+
     def env_ctor(env_id=None):
         return suite_gym.wrap_env(
             env,
@@ -167,9 +150,9 @@ def load(env_name,
                   seed=random.randint(0, 100000000))
     config = AttrDict()
     config.update(args) 
-    env = KarelGymEnv(config, model_path)
+    env = KarelGymEnv(config)
     env._max_episode_steps = config.max_episode_steps
-    env = KarelEnvWrapper(env)
+    env = KarelEnvWrapper(env, model=model)
     print(f'ENVIRONMENT: {env_task}')
     #env.reset()
     #env = ActionScalingWrapper(env)
