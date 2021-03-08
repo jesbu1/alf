@@ -21,10 +21,10 @@ create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning
 create_environment.n_rollout_steps=20
 
 suite_karel_env_hrl.load.task_definition="custom_reward"
-suite_karel_env_hrl.load.width=8
-suite_karel_env_hrl.load.height=8
-suite_karel_env_hrl.load.env_task="chainSmoker"
-suite_karel_env_hrl.load.max_episode_steps=33
+suite_karel_env_hrl.load.width=22
+suite_karel_env_hrl.load.height=14
+suite_karel_env_hrl.load.env_task="cleanHouse"
+suite_karel_env_hrl.load.max_episode_steps=100
 suite_karel_env_hrl.load.obv_type="local"
 suite_karel_env_hrl.load.wall_prob=0.25
 suite_karel_env_hrl.load.incorrect_marker_penalty=True
@@ -52,8 +52,8 @@ PPOLoss.normalize_advantages=True
 PPOLoss.importance_ratio_clipping=0.1
 
 # training config
-TrainerConfig.mini_batch_length=33
-TrainerConfig.unroll_length=33
+TrainerConfig.mini_batch_length=100
+TrainerConfig.unroll_length=100
 TrainerConfig.mini_batch_size=128
 TrainerConfig.num_updates_per_train_iter=8
 TrainerConfig.num_iterations=0

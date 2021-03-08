@@ -3,12 +3,14 @@
   "use_gpu": true,
   "gpus": [
     0,
-    1
+    1,
+    2,
+    3
   ],
-  "max_worker_num": 15,
+  "max_worker_num": 12,
   "repeats": 5,
   "parameters": {
-    "suite_karel_env.load.env_task": [
+    "suite_karel_env_hrl.load.env_task": [
       "'randomMaze'",
       "'harvester'"
     ],
@@ -26,9 +28,9 @@
       1e-3
     ],
     "TrainerConfig.num_updates_per_train_iter": [
-      4,
-      8,
-      16
+      25,
+      50,
+      100
     ]
   }
 }

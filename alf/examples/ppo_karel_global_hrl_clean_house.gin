@@ -12,6 +12,8 @@ action_spec=@get_action_spec()
 
 import alf.environments.suite_karel_env_hrl
 
+RLAlgorithm.detach_action=True
+
 # environment config
 create_environment.env_name="Karel"
 create_environment.num_parallel_environments=10
@@ -21,41 +23,44 @@ create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning
 create_environment.n_rollout_steps=20
 
 suite_karel_env_hrl.load.task_definition="custom_reward"
-suite_karel_env_hrl.load.width=8
-suite_karel_env_hrl.load.height=8
-suite_karel_env_hrl.load.env_task="chainSmoker"
-suite_karel_env_hrl.load.max_episode_steps=33
-suite_karel_env_hrl.load.obv_type="local"
+suite_karel_env_hrl.load.width=22
+suite_karel_env_hrl.load.height=14
+suite_karel_env_hrl.load.env_task="cleanHouse"
+suite_karel_env_hrl.load.max_episode_steps=100
+suite_karel_env_hrl.load.obv_type="global"
 suite_karel_env_hrl.load.wall_prob=0.25
 suite_karel_env_hrl.load.incorrect_marker_penalty=True
 suite_karel_env_hrl.load.delayed_reward=True
 
+CONV_LAYER_PARAMS=((32, 2, 1), (32, 4, 1))
 # algorithm config
-actor/ActorDistributionRNNNetwork.input_tensor_spec=%observation_spec
-actor/ActorDistributionRNNNetwork.action_spec=%action_spec
-actor/ActorDistributionRNNNetwork.fc_layer_params=(100,)
+actor/ActorDistributionNetwork.input_tensor_spec=%observation_spec
+actor/ActorDistributionNetwork.action_spec=%action_spec
+actor/ActorDistributionNetwork.fc_layer_params=(100,)
+actor/ActorDistributionNetwork.conv_layer_params=%CONV_LAYER_PARAMS
 
-value/ValueRNNNetwork.input_tensor_spec=%observation_spec
-value/ValueRNNNetwork.fc_layer_params=(100,)
+value/ValueNetwork.conv_layer_params=%CONV_LAYER_PARAMS
+value/ValueNetwork.input_tensor_spec=%observation_spec
+value/ValueNetwork.fc_layer_params=(100,)
 
 ac/Adam.lr=1e-3
 
-ActorCriticAlgorithm.actor_network_ctor=@actor/ActorDistributionRNNNetwork
-ActorCriticAlgorithm.value_network_ctor=@value/ValueRNNNetwork
+ActorCriticAlgorithm.actor_network_ctor=@actor/ActorDistributionNetwork
+ActorCriticAlgorithm.value_network_ctor=@value/ValueNetwork
 Agent.optimizer=@ac/Adam()
 
 
-PPOLoss.entropy_regularization=0.05
+PPOLoss.entropy_regularization=1e-2
 PPOLoss.gamma=1.0
 PPOLoss.td_error_loss_fn=@element_wise_huber_loss
-PPOLoss.normalize_advantages=True
+PPOLoss.normalize_advantages=False
 PPOLoss.importance_ratio_clipping=0.1
 
 # training config
-TrainerConfig.mini_batch_length=33
-TrainerConfig.unroll_length=33
+TrainerConfig.mini_batch_length=100
+TrainerConfig.unroll_length=100
 TrainerConfig.mini_batch_size=128
-TrainerConfig.num_updates_per_train_iter=8
+TrainerConfig.num_updates_per_train_iter=4
 TrainerConfig.num_iterations=0
 TrainerConfig.num_env_steps=500000
 TrainerConfig.evaluate=True
@@ -64,7 +69,6 @@ TrainerConfig.debug_summaries=False
 TrainerConfig.summary_interval=5
 TrainerConfig.epsilon_greedy=0.
 TrainerConfig.num_checkpoints=1
-TrainerConfig.use_rollout_state=True
 TrainerConfig.num_eval_episodes=20
 
 ReplayBuffer.max_length = 2048

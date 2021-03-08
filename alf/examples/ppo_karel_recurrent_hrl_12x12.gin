@@ -21,8 +21,8 @@ create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning
 create_environment.n_rollout_steps=20
 
 suite_karel_env_hrl.load.task_definition="custom_reward"
-suite_karel_env_hrl.load.width=8
-suite_karel_env_hrl.load.height=8
+suite_karel_env_hrl.load.width=12
+suite_karel_env_hrl.load.height=12
 suite_karel_env_hrl.load.env_task="chainSmoker"
 suite_karel_env_hrl.load.max_episode_steps=33
 suite_karel_env_hrl.load.obv_type="local"
