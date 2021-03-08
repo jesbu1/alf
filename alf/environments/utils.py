@@ -122,11 +122,11 @@ def create_environment(env_name='CartPole-v0',
                     #n_processing_layers=5,
                     nz_vae=5,
                     n_rollout_steps=n_rollout_steps,
-                    device='cpu'
+                    device='cuda'
                 )
                 model = BCMdl(ll_model_params)
                 model.load_state_dict(torch.load(model_path))
-                model.cpu()
+                model.cuda()
                 model.eval()
                 return model
             model =_load_model(model_path)

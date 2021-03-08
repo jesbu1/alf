@@ -47,8 +47,10 @@ class KarelEnvWrapper(gym.Wrapper):
         return self.observation(ob.astype(np.float32)), float(reward), done, {}
 
     def generate_action_plan(self, z):
+        if isinstance(z, np.ndarray):
+            return [0]
         with torch.no_grad():
-            z = torch.from_numpy(z)
+            #z = torch.from_numpy(z)
             action_plan = self.model.decode(z, z, self.model.n_rollout_steps)[0]
             action_plan = action_plan.cpu().detach().tolist()
         return action_plan

@@ -12,6 +12,8 @@ action_spec=@get_action_spec()
 
 import alf.environments.suite_karel_env_hrl
 
+RLAlgorithm.detach_action=True
+
 # environment config
 create_environment.env_name="Karel"
 create_environment.num_parallel_environments=10

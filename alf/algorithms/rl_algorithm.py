@@ -80,7 +80,8 @@ class RLAlgorithm(Algorithm):
                  config: TrainerConfig = None,
                  optimizer=None,
                  debug_summaries=False,
-                 name="RLAlgorithm"):
+                 name="RLAlgorithm",
+                 detach_action=True):
         """
         Args:
             observation_spec (nested TensorSpec): representing the observations.
@@ -161,6 +162,7 @@ class RLAlgorithm(Algorithm):
 
         self._original_rollout_step = self.rollout_step
         self.rollout_step = self._rollout_step
+        self._detach_action = detach_action
 
     def is_rl(self):
         """Always return True for RLAlgorithm."""
@@ -443,7 +445,10 @@ class RLAlgorithm(Algorithm):
             transformed_time_step = transformed_time_step._replace(
                 untransformed=())
 
-            action = common.detach(policy_step.output)
+            if self._detach_action:
+                action = common.detach(policy_step.output)
+            else:
+                action = policy_step.output
 
             t0 = time.time()
             next_time_step = self._env.step(action)
