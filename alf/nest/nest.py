@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -337,6 +337,40 @@ def py_assert_same_structure(nest1, nest2):
                 py_assert_same_structure(fv1[1], fv2[1])
 
 
+def py_map_structure_with_path(func, *nests):
+    """Applies func to each entry in structure and returns a new structure.
+    This function gives func access to one additional parameter as its first argument:
+    the symbolic string of the path to the element currently supplied.
+    List elements will be index by the ordinal position of the element in the list.
+    """
+    assert nests, "There should be at least one input nest!"
+    for nest in nests[1:]:
+        py_assert_same_structure(nests[0], nest)
+
+    def _map(*nests, path=""):
+        if not is_nested(nests[0]):
+            return func(path, *nests)
+        if isinstance(nests[0], list) or is_unnamedtuple(nests[0]):
+            ret = type(nests[0])([
+                _map(
+                    *values[:-1],
+                    path=path + ("." if path else "") + str(values[-1]))
+                for values in zip(*nests, range(len(nests[0])))
+            ])[:-1]
+        else:
+            ret = {}
+            for fields_and_values in zip(
+                    *[extract_fields_from_nest(nest) for nest in nests]):
+                field = fields_and_values[0][0]
+                values = map(lambda fv: fv[1], fields_and_values)
+                ret[field] = _map(
+                    *values, path=path + ("." if path else "") + field)
+            ret = type(nests[0])(**ret)
+        return ret
+
+    return _map(*nests, path="")
+
+
 def py_map_structure(func, *nests):
     """Applies func to each entry in structure and returns a new structure."""
     assert nests, "There should be at least one input nest!"
@@ -540,6 +574,10 @@ def find_field(nest, name, ignore_empty=True):
     Returns:
         list
     """
+
+    def _is_empty(x):
+        return isinstance(x, (tuple, list)) and len(x) == 0
+
     ret = []
     if isinstance(nest, list) or is_unnamedtuple(nest):
         for elem in nest:
@@ -548,7 +586,7 @@ def find_field(nest, name, ignore_empty=True):
     elif isinstance(nest, dict) or is_namedtuple(nest):
         for field, elem in extract_fields_from_nest(nest):
             if field == name:
-                if ((elem is not None and elem != () and elem != [])
+                if ((elem is not None and not _is_empty(elem))
                         or not ignore_empty):
                     ret.append(elem)
             elif isinstance(elem, (dict, tuple, list)):
@@ -639,7 +677,7 @@ def get_field(nested, field):
     Args:
         nested (nest): a nested structure
         field (str): indicate the path to the field with '.' separating the field
-            name at different level
+            name at different level. ``None`` means the whole nest
     Returns:
         nest: value of the field corresponding to ``field``
     """
@@ -656,4 +694,76 @@ def get_field(nested, field):
             raise TypeError("If value is a nest, it must be either " +
                             "a dict or namedtuple!")
 
-    return _traverse(nested=nested, levels=field.split('.'))
+    return _traverse(nested=nested, levels=field.split('.') if field else [])
+
+
+def transform_nest(nested, field, func):
+    """Transform the node of a nested structure indicated by ``field`` using
+    ``func``.
+
+    This function can be used to update our ``namedtuple`` structure conveniently,
+    comparing the following two methods:
+
+        .. code-block:: python
+
+            info = info._replace(rl=info.rl._replace(sac=info.rl.sac * 0.5))
+
+    vs.
+
+        .. code-block:: python
+
+            info = transform_nest(info, 'rl.sac', lambda x: x * 0.5)
+
+    The second method is usually shorter, more intuitive, and less error-prone
+    when ``field`` is a long string.
+
+    Args:
+        nested (nested Tensor): the structure to be applied the transformation.
+        field (str): If a string, it's the field to be transformed, multi-level
+            path denoted by "A.B.C". If ``None``, then the root object is
+            transformed.
+        func (Callable): transform func, the function will be called as
+            ``func(nested)`` and should return a new nest.
+    Returns:
+        transformed nest
+    """
+
+    def _traverse_transform(nested, levels):
+        if not levels:
+            return func(nested)
+        level = levels[0]
+        if is_namedtuple(nested):
+            new_val = _traverse_transform(
+                nested=getattr(nested, level), levels=levels[1:])
+            return nested._replace(**{level: new_val})
+        elif isinstance(nested, dict):
+            new_val = nested.copy()
+            new_val[level] = _traverse_transform(
+                nested=nested[level], levels=levels[1:])
+            return new_val
+        else:
+            raise TypeError("If value is a nest, it must be either " +
+                            "a dict or namedtuple!")
+
+    return _traverse_transform(
+        nested=nested, levels=field.split('.') if field else [])
+
+
+def set_field(nested, field, new_value):
+    """Set the field in nested to ``new_value``.
+
+    field is a string separated by ".". set_filed(nested, "a.b", v) is equivalent
+    to ``nested._replace(a=nested.a._replace(b=v))`` if nested is constructed
+    using namedtuple.
+
+    Args:
+        nested (nest): a nested structure
+        field (str): indicate the path to the field with '.' separating the field
+            name at different level
+        new_value (any): the new value for the field
+    Returns:
+        nest: a nest same as ``nested`` except the filed ``field`` replaced by
+            ``new_value``
+    """
+
+    return transform_nest(nested, field, lambda _: new_value)

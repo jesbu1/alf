@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -73,8 +73,8 @@ class RandomAlfEnvironment(alf_environment.AlfEnvironment):
         self._batch_size = batch_size
         self._observation_spec = observation_spec
         self._action_spec = action_spec
-        self._time_step_spec = ds.time_step_spec(self._observation_spec,
-                                                 action_spec)
+        self._time_step_spec = ds.time_step_spec(
+            self._observation_spec, action_spec, ts.TensorSpec(()))
         self._episode_end_probability = episode_end_probability
         discount = np.asarray(discount, dtype=np.float32)
         if env_id is None:
@@ -137,7 +137,7 @@ class RandomAlfEnvironment(alf_environment.AlfEnvironment):
         return ds.restart(
             self._get_observation(),
             self._action_spec,
-            self._env_id,
+            env_id=self._env_id,
             batched=batched)
 
     def _sample_spec(self, spec, outer_dims):
@@ -180,14 +180,18 @@ class RandomAlfEnvironment(alf_environment.AlfEnvironment):
         if self._done:
             reward = self._reward_fn(ds.StepType.LAST, action, observation)
             self._check_reward_shape(reward)
-            time_step = ds.termination(observation, action, reward,
-                                       self._env_id)
+            time_step = ds.termination(
+                observation, action, reward, env_id=self._env_id)
             self._num_steps = 0
         else:
             reward = self._reward_fn(ds.StepType.MID, action, observation)
             self._check_reward_shape(reward)
-            time_step = ds.transition(observation, action, reward,
-                                      self._discount, self._env_id)
+            time_step = ds.transition(
+                observation,
+                action,
+                reward,
+                discount=self._discount,
+                env_id=self._env_id)
 
         return time_step
 

@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -93,6 +93,9 @@ class MyEnv(object):
 
     def action_spec(self):
         return self._action_spec
+
+    def reward_spec(self):
+        return alf.TensorSpec(())
 
     def reset(self):
         self._prev_action = torch.zeros(self._batch_size, dtype=torch.int64)

@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -31,17 +31,20 @@ class ValueNetwork(PreprocessorNetwork):
 
     def __init__(self,
                  input_tensor_spec,
+                 output_tensor_spec=TensorSpec(()),
                  input_preprocessors=None,
                  preprocessing_combiner=None,
                  conv_layer_params=None,
                  fc_layer_params=None,
                  activation=torch.relu_,
                  kernel_initializer=None,
+                 use_fc_bn=False,
                  name="ValueNetwork"):
         """Creates a value network that estimates the expected return.
 
         Args:
             input_tensor_spec (TensorSpec): the tensor spec of the input
+            output_tensor_spec (TensorSpec): spec for the output
             input_preprocessors (nested InputPreprocessor): a nest of
                 `InputPreprocessor`, each of which will be applied to the
                 corresponding input. If not None, then it must
@@ -65,8 +68,10 @@ class ValueNetwork(PreprocessorNetwork):
             activation (nn.functional): activation used for hidden layers. The
                 last layer will not be activated.
             kernel_initializer (Callable): initializer for all the layers but
-            the last layer. If none is provided a default xavier_uniform
-            initializer will be used.
+                the last layer. If none is provided a default xavier_uniform
+                initializer will be used.
+            use_fc_bn (bool): whether use Batch Normalization for the internal
+                FC layers (i.e. FC layers beside the last one).
             name (str):
         """
         super().__init__(
@@ -87,11 +92,12 @@ class ValueNetwork(PreprocessorNetwork):
             fc_layer_params=fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
-            last_layer_size=1,
+            use_fc_bn=use_fc_bn,
+            last_layer_size=output_tensor_spec.numel,
             last_activation=math_ops.identity,
             last_kernel_initializer=last_kernel_initializer)
 
-        self._output_spec = TensorSpec(())
+        self._output_spec = output_tensor_spec
 
     def forward(self, observation, state=()):
         """Computes a value given an observation.
@@ -106,7 +112,8 @@ class ValueNetwork(PreprocessorNetwork):
         """
         observation, state = super().forward(observation, state)
         value, _ = self._encoding_net(observation)
-        return torch.squeeze(value, -1), state
+        value = value.reshape(value.shape[0], *self._output_spec.shape)
+        return value, state
 
 
 @gin.configurable
@@ -115,6 +122,7 @@ class ValueRNNNetwork(PreprocessorNetwork):
 
     def __init__(self,
                  input_tensor_spec,
+                 output_tensor_spec=TensorSpec(()),
                  input_preprocessors=None,
                  preprocessing_combiner=None,
                  conv_layer_params=None,
@@ -128,6 +136,7 @@ class ValueRNNNetwork(PreprocessorNetwork):
 
         Args:
             input_tensor_spec (TensorSpec): the tensor spec of the input
+            output_tensor_spec (TensorSpec): spec for the output
             input_preprocessors (nested InputPreprocessor): a nest of
                 `InputPreprocessor`, each of which will be applied to the
                 corresponding input. If not None, then it must
@@ -180,11 +189,11 @@ class ValueRNNNetwork(PreprocessorNetwork):
             post_fc_layer_params=value_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
-            last_layer_size=1,
+            last_layer_size=output_tensor_spec.numel,
             last_activation=math_ops.identity,
             last_kernel_initializer=last_kernel_initializer)
 
-        self._output_spec = TensorSpec(())
+        self._output_spec = output_tensor_spec
 
     def forward(self, observation, state):
         """Computes a value given an observation.
@@ -199,7 +208,8 @@ class ValueRNNNetwork(PreprocessorNetwork):
         """
         observation, state = super().forward(observation, state)
         value, state = self._encoding_net(observation, state)
-        return torch.squeeze(value, -1), state
+        value = value.reshape(value.shape[0], *self._output_spec.shape)
+        return value, state
 
     @property
     def state_spec(self):

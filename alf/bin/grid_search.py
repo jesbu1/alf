@@ -193,7 +193,7 @@ class GridSearch(object):
                            parameters,
                            id,
                            repeat,
-                           token_len=6,
+                           token_len=20,
                            max_len=255):
         """Generate a run name by writing abbr parameter key-value pairs in it,
         for an easy curve comparison between different search runs without going
@@ -293,11 +293,13 @@ class GridSearch(object):
                 alf.set_default_device("cuda")
             logging.set_verbosity(logging.INFO)
 
-            logging.info("parameters %s" % parameters)
+            logging.info("Search parameters %s" % parameters)
             with gin.unlock_config():
                 gin.parse_config(
                     ['%s=%s' % (k, v) for k, v in parameters.items()])
-            train_eval(root_dir)
+                gin.parse_config(
+                    "TrainerConfig.confirm_checkpoint_upon_crash=False")
+            train_eval(FLAGS.ml_type, root_dir)
 
             device_queue.put(device)
         except Exception as e:
@@ -306,6 +308,7 @@ class GridSearch(object):
 
 
 def main(_):
+    FLAGS.alsologtostderr = True
     GridSearch(FLAGS.search_config).run()
 
 

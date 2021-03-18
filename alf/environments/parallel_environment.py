@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -68,8 +68,11 @@ class ParallelAlfEnvironment(alf_environment.AlfEnvironment):
         self.start()
         self._action_spec = self._envs[0].action_spec()
         self._observation_spec = self._envs[0].observation_spec()
+        self._reward_spec = self._envs[0].reward_spec()
         self._time_step_spec = self._envs[0].time_step_spec()
         self._env_info_spec = self._envs[0].env_info_spec()
+        self._num_tasks = self._envs[0].num_tasks
+        self._task_names = self._envs[0].task_names
         self._time_step_with_env_info_spec = self._time_step_spec._replace(
             env_info=self._env_info_spec)
         self._parallel_execution = True
@@ -105,6 +108,14 @@ class ParallelAlfEnvironment(alf_environment.AlfEnvironment):
     def batch_size(self):
         return self._num_envs
 
+    @property
+    def num_tasks(self):
+        return self._num_tasks
+
+    @property
+    def task_names(self):
+        return self._task_names
+
     def env_info_spec(self):
         return self._env_info_spec
 
@@ -113,6 +124,9 @@ class ParallelAlfEnvironment(alf_environment.AlfEnvironment):
 
     def action_spec(self):
         return self._action_spec
+
+    def reward_spec(self):
+        return self._reward_spec
 
     def time_step_spec(self):
         return self._time_step_spec
@@ -166,7 +180,9 @@ class ParallelAlfEnvironment(alf_environment.AlfEnvironment):
             stacked = nest.fast_map_structure(
                 lambda *arrays: torch.stack(arrays), *time_steps)
         if alf.get_default_device() == "cuda":
-            stacked = nest.map_structure(lambda x: x.cuda(), stacked)
+            cpu = stacked
+            stacked = nest.map_structure(lambda x: x.cuda(), cpu)
+            stacked._cpu = cpu
         return stacked
 
     def _unstack_actions(self, batched_actions):

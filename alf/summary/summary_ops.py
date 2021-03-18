@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,15 +14,29 @@
 """Summary related functions."""
 
 import functools
+import numpy as np
 import torch
 from torch.utils.tensorboard import SummaryWriter
 from typing import Callable
 
+try:
+    # If tensorflow has been installed, pytorch might use tensorflow's
+    # tensorboard. In this case, gfile needs to be redirected if embedding
+    # projector is to be used.
+    # https://github.com/pytorch/pytorch/issues/30966#issuecomment-582747929
+    import tensorflow as tf
+    import tensorboard as tb
+    tf.io.gfile = tb.compat.tensorflow_stub.io.gfile
+except:
+    pass
+
 _summary_enabled = False
+
+_summarize_output = False
 
 _default_writer: SummaryWriter = None
 
-_global_counter = torch.tensor(0, dtype=torch.int64)
+_global_counter = np.array(0, dtype=np.int64)
 
 _scope_stack = ['']
 
@@ -144,6 +158,37 @@ def histogram(name, data, step=None, bins=None, walltime=None, max_bins=None):
         name, data, step, bins=bins, walltime=walltime, max_bins=max_bins)
 
 
+@_summary_wrapper
+def embedding(name, data, step=None, class_labels=None, label_imgs=None):
+    """Add embeddings to summary. The potentially high-dimensional embeddings
+    will be projected down to either 2D or 3D for visualization, with several
+    projection techniques to choose from in Tensorboard.
+
+    The visualized embeddings can be seen in the "PROJECTOR" page of Tensorboard.
+
+    Note: if this function is called multiple times, on the page there will be
+    multiple visualizations, each for every call.
+
+    Args:
+        name (str): data identifier
+        data (Tensor | numpy.array): a matrix of shape ``[N, D]``, where ``D``
+            is the dimensionality of the embedding.
+        step (int): global step value to record. None for using
+            ``get_global_counter()``.
+        class_labels (list[str]): an optional list of class labels of length
+            ``N`` can be provided, where each label corresponds to an embedding.
+        label_imgs (Tensor): an optional tensor of shape ``[N, C, H, W]``. Each
+            label img corresponds to an embedding. Use this if you want to
+            associate each embedding with an image for visualization.
+    """
+    _summary_writer_stack[-1].add_embedding(
+        tag=name,
+        mat=data,
+        metadata=class_labels,
+        label_img=label_imgs,
+        global_step=step)
+
+
 def should_record_summaries():
     """Whether summary should be recorded.
 
@@ -168,7 +213,17 @@ def get_global_counter():
 def reset_global_counter():
     """Reset the global counter to zero
     """
-    _global_counter.data.fill_(0)
+    _global_counter.fill(0)
+
+
+def increment_global_counter():
+    global _global_counter
+    _global_counter += 1
+
+
+def set_global_counter(counter):
+    global _global_counter
+    _global_counter.fill(counter)
 
 
 class record_if(object):
@@ -231,6 +286,22 @@ def disable_summary():
 def is_summary_enabled():
     """Return whether summary is enabled."""
     return _summary_enabled
+
+
+def should_summarize_output(flag=None):
+    """Get or set summarize output flag.
+
+    Args:
+        flag (bool or None): when provided, sets the flag, otherwise, return
+            the stored _summarize_output flag.
+    Returns:
+        bool for getter or None for setter.
+    """
+    global _summarize_output
+    if flag is None:
+        return _summarize_output and should_record_summaries()
+    else:
+        _summarize_output = bool(flag)
 
 
 class push_summary_writer(object):

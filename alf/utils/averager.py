@@ -71,8 +71,8 @@ class WindowAverager(nn.Module):
         """
         alf.nest.map_structure(
             lambda buf, t, spec: buf.add_batch(
-                average_outer_dims(t, spec).unsqueeze(0)), self._buf, tensor,
-            self._tensor_spec)
+                average_outer_dims(t, spec).unsqueeze(0)), self._buf,
+            tensor.detach(), self._tensor_spec)
 
     def get(self):
         """Get the current average.
@@ -182,8 +182,8 @@ class EMAverager(nn.Module):
         alf.nest.map_structure(
             lambda average, t, spec: average.add_(
                 torch.as_tensor(self._update_rate, dtype=t.dtype) * (
-                    average_outer_dims(t, spec) - average)), self._average,
-            tensor, self._tensor_spec)
+                    average_outer_dims(t.detach(), spec) - average)),
+            self._average, tensor, self._tensor_spec)
         self._mass.add_(
             torch.as_tensor(self._update_rate, dtype=torch.float64) *
             (1 - self._mass))
@@ -195,10 +195,8 @@ class EMAverager(nn.Module):
             Tensor: the current average
         """
         return alf.nest.map_structure(
-            lambda average: average / torch.max(
-                self._mass.to(average.dtype),
-                torch.as_tensor(self._update_rate, dtype=average.dtype)),
-            self._average)
+            lambda average: average / self._mass.clamp(min=self._update_rate).
+            to(average.dtype), self._average)
 
     def average(self, tensor):
         """Combines ``self.update`` and ``self.get`` in one step. Can be handy

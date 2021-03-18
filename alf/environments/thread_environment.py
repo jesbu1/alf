@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -14,6 +14,7 @@
 """Runs a single environments in a separate thread. """
 
 from multiprocessing import dummy as mp_threads
+import numpy as np
 import torch
 
 import alf
@@ -23,7 +24,8 @@ import alf.nest as nest
 
 def _array_to_tensor(data):
     def _array_to_tensor(obj):
-        return torch.as_tensor(obj).unsqueeze(dim=0)
+        return torch.as_tensor(obj).unsqueeze(
+            dim=0) if isinstance(obj, (np.ndarray, np.number)) else obj
 
     return nest.map_structure(_array_to_tensor, data)
 
@@ -47,6 +49,10 @@ class ThreadEnvironment(alf_environment.AlfEnvironment):
         self._env = self._pool.apply(env_constructor)
 
     @property
+    def batched(self):
+        return True
+
+    @property
     def batch_size(self):
         return 1
 
@@ -58,6 +64,9 @@ class ThreadEnvironment(alf_environment.AlfEnvironment):
 
     def action_spec(self):
         return self._apply('action_spec')
+
+    def reward_spec(self):
+        return self._apply('reward_spec')
 
     def _step(self, action):
         action = _tensor_to_array(action)

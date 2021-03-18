@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -30,7 +30,9 @@ def _make_alg_experience(experience, name):
         rollout_info = ()
     else:
         rollout_info = getattr(experience.rollout_info, name)
-    return experience._replace(rollout_info=rollout_info)
+    return experience._replace(
+        rollout_info=rollout_info,
+        rollout_info_field=experience.rollout_info_field + '.' + name)
 
 
 class AgentHelper(object):
@@ -132,7 +134,9 @@ class AgentHelper(object):
                     loss=add_ignore_empty(loss_info.loss, new_loss_info.loss),
                     scalar_loss=add_ignore_empty(loss_info.scalar_loss,
                                                  new_loss_info.scalar_loss),
-                    extra=loss_info.extra)
+                    extra=loss_info.extra,
+                    priority=add_ignore_empty(loss_info.priority,
+                                              new_loss_info.priority))
 
         loss_info = None
         for alg in algorithms:

@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -16,6 +16,7 @@ import functools
 import gin
 import hashlib
 import numpy as np
+import math
 import torch
 import torch.distributions as td
 from torch.distributions import constraints
@@ -24,8 +25,8 @@ import torch.nn as nn
 import alf
 import alf.nest as nest
 import alf.nest.utils as nest_utils
-from alf.tensor_specs import TensorSpec
-from alf.utils import common
+from alf.tensor_specs import TensorSpec, BoundedTensorSpec
+from alf.utils import common, spec_utils
 
 
 def get_invertable(cls):
@@ -63,6 +64,9 @@ class Softsign(td.Transform):
     codomain = constraints.interval(-1.0, 1.0)
     bijective = True
     sign = +1
+
+    def __init__(self):
+        super().__init__(cache_size=1)
 
     def __eq__(self, other):
         return isinstance(other, Softsign)
@@ -199,13 +203,58 @@ class DiagMultivariateNormal(td.Independent):
 
         Args:
             loc (Tensor): mean of the distribution
-            scale (Tensor): standard deviation. Should have same shape as loc
+            scale (Tensor): standard deviation. Should have same shape as ``loc``.
         """
         super().__init__(td.Normal(loc, scale), reinterpreted_batch_ndims=1)
 
     @property
     def stddev(self):
         return self.base_dist.stddev
+
+
+class StableCauchy(td.Cauchy):
+    def rsample(self, sample_shape=torch.Size(), clipping_value=0.49):
+        r"""Overwrite Pytorch's Cauchy rsample for a more stable result. Basically
+        the sampled number is clipped to fall within a reasonable range.
+
+
+        For reference::
+
+            > np.tan(math.pi * -0.499)
+            -318.30883898554157
+            > np.tan(math.pi * -0.49)
+            -31.820515953773853
+
+        Args:
+            clipping_value (float): suppose eps is sampled from ``(-0.5,0.5)``.
+                It will be clipped to ``[-clipping_value, clipping_value]`` to
+                avoid values with huge magnitudes.
+        """
+        shape = self._extended_shape(sample_shape)
+        eps = self.loc.new(shape).uniform_()
+        eps = torch.clamp(eps - 0.5, min=-clipping_value, max=clipping_value)
+        return torch.tan(eps * math.pi) * self.scale + self.loc
+
+
+class DiagMultivariateCauchy(td.Independent):
+    def __init__(self, loc, scale):
+        """Create multivariate cauchy distribution with diagonal scale matrix.
+
+        Args:
+            loc (Tensor): median of the distribution. Note that Cauchy doesn't
+                have a mean (divergent).
+            scale (Tensor): also known as "half width". Should have the same
+                shape as ``loc``.
+        """
+        super().__init__(StableCauchy(loc, scale), reinterpreted_batch_ndims=1)
+
+    @property
+    def loc(self):
+        return self.base_dist.loc
+
+    @property
+    def scale(self):
+        return self.base_dist.scale
 
 
 def _builder_independent(base_builder, reinterpreted_batch_ndims, **kwargs):
@@ -218,9 +267,15 @@ def _builder_transformed(base_builder, transforms, **kwargs):
 
 def _get_builder(obj):
     if type(obj) == td.Categorical:
-        return td.Categorical, {'logits': obj.logits}
+        if 'probs' in obj.__dict__ and id(obj.probs) == id(obj._param):
+            # This means that obj is constructed using probs
+            return td.Categorical, {'probs': obj.probs}
+        else:
+            return td.Categorical, {'logits': obj.logits}
     elif type(obj) == td.Normal:
         return td.Normal, {'loc': obj.mean, 'scale': obj.stddev}
+    elif type(obj) == StableCauchy:
+        return StableCauchy, {'loc': obj.loc, 'scale': obj.scale}
     elif type(obj) == td.Independent:
         builder, params = _get_builder(obj.base_dist)
         new_builder = functools.partial(_builder_independent, builder,
@@ -228,6 +283,8 @@ def _get_builder(obj):
         return new_builder, params
     elif type(obj) == DiagMultivariateNormal:
         return DiagMultivariateNormal, {'loc': obj.mean, 'scale': obj.stddev}
+    elif type(obj) == DiagMultivariateCauchy:
+        return DiagMultivariateCauchy, {'loc': obj.loc, 'scale': obj.scale}
     elif isinstance(obj, td.TransformedDistribution):
         builder, params = _get_builder(obj.base_dist)
         new_builder = functools.partial(_builder_transformed, builder,
@@ -506,6 +563,8 @@ def get_mode(dist):
         mode = torch.argmax(dist.logits, -1)
     elif isinstance(dist, td.normal.Normal):
         mode = dist.mean
+    elif isinstance(dist, StableCauchy):
+        mode = dist.loc
     elif isinstance(dist, td.Independent):
         mode = get_mode(dist.base_dist)
     elif isinstance(dist, td.TransformedDistribution):
@@ -533,7 +592,8 @@ def get_base_dist(dist):
         NotImplementedError: if ``dist`` or its based distribution is not
             ``td.Normal``, ``td.Independent`` or ``td.TransformedDistribution``.
     """
-    if isinstance(dist, td.Normal) or isinstance(dist, td.Categorical):
+    if (isinstance(dist, td.Normal) or isinstance(dist, td.Categorical)
+            or isinstance(dist, StableCauchy)):
         return dist
     elif isinstance(dist, (td.Independent, td.TransformedDistribution)):
         return get_base_dist(dist.base_dist)
@@ -656,13 +716,52 @@ def calc_default_target_entropy(spec, min_prob=0.1):
     Returns:
         target entropy
     """
+
+    def _calc_discrete_entropy(m, M, log_mp):
+        N = M - m + 1
+        if N == 1:
+            return 0
+        return min_prob * (np.log(N - 1) - log_mp)
+
     zeros = np.zeros(spec.shape)
     min_max = np.broadcast(spec.minimum, spec.maximum, zeros)
     cont = spec.is_continuous
-    log_mp = np.log(min_prob)
-    e = np.sum([(np.log(M - m) + log_mp
-                 if cont else min_prob * (np.log(M - m) - log_mp))
-                for m, M, _ in min_max])
+    log_mp = np.log(min_prob + 1e-30)
+    e = np.sum([(np.log(M - m) + log_mp if cont else _calc_discrete_entropy(
+        m, M, log_mp)) for m, M, _ in min_max])
+    return e
+
+
+@gin.configurable
+def calc_default_target_entropy_quantized(spec,
+                                          num_bins,
+                                          ent_per_action_dim=-1.0):
+    """Calc default target entropy for quantized continuous action.
+    Args:
+        spec (TensorSpec): action spec
+        num_bins (int): number of quantization bins used to represent the
+            continuous action
+        ent_per_action_dim (int): desired entropy per action dimension
+            for the non-quantized continuous action; default value is -1.0
+            as suggested by the SAC paper.
+    Returns:
+        target entropy for quantized representation
+    """
+
+    zeros = np.zeros(spec.shape)
+    min_max = np.broadcast(spec.minimum, spec.maximum, zeros)
+
+    cont = spec.is_continuous
+    assert cont, "only support continuous action-based computation"
+
+    log_Mn = np.log(spec.maximum - spec.minimum)
+    log_mp = ent_per_action_dim - log_Mn
+    log_B = np.log(num_bins)
+
+    ents = [log_mp + log_B for i in range(spec.shape[0])]
+    e = np.sum(ents)
+
+    assert e > 0, "wrong target entropy for discrete distribution {}".format(e)
     return e
 
 
@@ -684,3 +783,22 @@ def calc_default_max_entropy(spec, fraction=0.8):
                  if cont else np.log(M - m + 1) * fraction)
                 for m, M, _ in min_max])
     return e
+
+
+def calc_uniform_log_prob(spec):
+    """Given an action spec, calculate the uniform log prob.
+
+    Args:
+        spec (BoundedTensorSpec): action spec must be a bounded spec
+
+    Returns:
+        The uniform log probability
+    """
+    assert isinstance(spec, BoundedTensorSpec)
+    zeros = np.zeros(spec.shape)
+    min_max = np.broadcast(spec.minimum, spec.maximum, zeros)
+    if spec.is_continuous:
+        log_prob = np.sum([-np.log(M - m) for m, M, _ in min_max])
+    else:
+        log_prob = np.sum([-np.log(M - m + 1) for m, M, _ in min_max])
+    return log_prob

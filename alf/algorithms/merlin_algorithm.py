@@ -27,13 +27,13 @@ from alf.algorithms.actor_critic_algorithm import ActorCriticInfo
 from alf.algorithms.algorithm import Algorithm
 from alf.algorithms.config import TrainerConfig
 from alf.algorithms.decoding_algorithm import DecodingAlgorithm
-from alf.algorithms.memory import MemoryWithUsage
 from alf.algorithms.on_policy_algorithm import OnPolicyAlgorithm
 from alf.algorithms.vae import VariationalAutoEncoder
 from alf.data_structures import TimeStep, AlgStep, LossInfo
 from alf.networks import EncodingNetwork, LSTMEncodingNetwork
 from alf.networks import ActorDistributionNetwork, ValueNetwork
 from alf.networks.action_encoder import SimpleActionEncoder
+from alf.networks.memory import MemoryWithUsage
 from alf.nest import flatten, map_structure
 from alf.utils import common, dist_utils, math_ops
 
@@ -490,12 +490,17 @@ class ResnetEncodingNetwork(alf.networks.Network):
                  input_tensor_spec,
                  output_size=500,
                  output_activation=torch.tanh,
+                 use_fc_bn=False,
+                 norm_layer=None,
                  name='ResnetEncodingNetwork'):
         """
         Args:
             input_tensor_spec (nested TensorSpec): input observations spec.
             output_size (int): dimension of the encoding result
             output_activation (Callable): activation for the output
+            use_fc_bn (bool): whether to use batch normalization for the final
+                ``FC`` layer.
+            norm_layer (nn.Module|None): optional additional layer for normalization.
         """
         super().__init__(input_tensor_spec, name=name)
 
@@ -516,10 +521,14 @@ class ResnetEncodingNetwork(alf.networks.Network):
         enc_layers.extend([
             nn.Flatten(),
             alf.layers.FC(
-                input_size=np.prod(shape),
+                input_size=int(np.prod(shape)),
                 output_size=output_size,
+                use_bn=use_fc_bn,
                 activation=output_activation)
         ])
+
+        if norm_layer:
+            enc_layers.append(norm_layer)
 
         self._model = nn.Sequential(*enc_layers)
 
@@ -556,7 +565,7 @@ class ResnetDecodingNetwork(alf.networks.Network):
         dec_layers.extend([
             alf.layers.FC(input_tensor_spec.shape[0], 500, activation=relu),
             alf.layers.FC(500, h * w, activation=relu),
-            alf.layers.Reshape((64, h / 8, w / 8))
+            alf.layers.Reshape((64, h // 8, w // 8))
         ])
 
         for stride in reversed([2, 1, 2, 1, 2, 1]):

@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -136,8 +136,13 @@ class AlfGymWrapper(AlfEnvironment):
             self._gym_env.observation_space, simplify_box_bounds)
         self._action_spec = tensor_spec_from_gym_space(
             self._gym_env.action_space, simplify_box_bounds)
-        self._time_step_spec = ds.time_step_spec(self._observation_spec,
-                                                 self._action_spec)
+        if hasattr(self._gym_env, "reward_space"):
+            self._reward_spec = tensor_spec_from_gym_space(
+                self._gym_env.reward_space, simplify_box_bounds)
+        else:
+            self._reward_spec = TensorSpec(())
+        self._time_step_spec = ds.time_step_spec(
+            self._observation_spec, self._action_spec, self._reward_spec)
         self._info = None
         self._done = True
         self._zero_info = self._obtain_zero_info()
@@ -181,6 +186,7 @@ class AlfGymWrapper(AlfEnvironment):
         return ds.restart(
             observation=observation,
             action_spec=self._action_spec,
+            reward_spec=self._reward_spec,
             env_id=self._env_id,
             env_info=self._zero_info)
 
@@ -200,12 +206,18 @@ class AlfGymWrapper(AlfEnvironment):
 
         if self._done:
             return ds.termination(
-                observation, action, reward, self._env_id, env_info=self._info)
+                observation,
+                action,
+                reward,
+                self._reward_spec,
+                self._env_id,
+                env_info=self._info)
         else:
             return ds.transition(
                 observation,
                 action,
                 reward,
+                self._reward_spec,
                 self._discount,
                 self._env_id,
                 env_info=self._info)
@@ -241,6 +253,9 @@ class AlfGymWrapper(AlfEnvironment):
 
     def action_spec(self):
         return self._action_spec
+
+    def reward_spec(self):
+        return self._reward_spec
 
     def close(self):
         return self._gym_env.close()

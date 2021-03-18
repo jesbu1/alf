@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -86,11 +86,4 @@ class StepMetric(nn.Module):
                 step = step_metric.result().to(torch.int64)
                 alf.summary.scalar(name=step_tag, data=res, step=step)
 
-        def _gen_nested(res):
-            for field, elem in alf.nest.extract_fields_from_nest(res):
-                if isinstance(elem, dict) or alf.nest.is_namedtuple(elem):
-                    _gen_nested(elem)
-                elif isinstance(elem, torch.Tensor):
-                    _gen_summary(field, elem)
-
-        _gen_nested(result)
+        alf.nest.py_map_structure_with_path(_gen_summary, result)

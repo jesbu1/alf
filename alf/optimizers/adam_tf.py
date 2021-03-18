@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -133,7 +133,7 @@ class AdamTF(Optimizer):
                     grad = grad.add(p, alpha=group['weight_decay'])
 
                 # Decay the first and second moment running average coefficient
-                exp_avg.mul_(beta1).add_(grad, alpha=1 - beta1)
+                exp_avg.lerp_(grad, 1 - beta1)
                 exp_avg_sq.mul_(beta2).addcmul_(grad, grad, value=1 - beta2)
                 if amsgrad:
                     # Maintains the maximum of all 2nd moment running avg. till now

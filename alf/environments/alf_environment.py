@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -21,6 +21,7 @@ Adapted from TF-Agents Environment API as seen in:
 import abc
 import six
 
+import alf
 from alf.data_structures import time_step_spec
 
 
@@ -65,6 +66,16 @@ class AlfEnvironment(object):
 
     def __init__(self):
         self._current_time_step = None
+
+    @property
+    def num_tasks(self):
+        """Number of tasks supported by this environment."""
+        return 1
+
+    @property
+    def task_names(self):
+        """The name of each tasks."""
+        return [str(i) for i in range(self.num_tasks)]
 
     @property
     def batched(self):
@@ -129,6 +140,17 @@ class AlfEnvironment(object):
             An ``TensorSpec``, or a nested dict, list or tuple of ``TensorSpec``s.
         """
 
+    def reward_spec(self):
+        """Defines the reward provided by the environment.
+
+        The reward of the most environments is a scalar. So we provide a default
+        implementation which returns a scalar spec.
+
+        Returns:
+            alf.TensorSpec
+        """
+        return alf.TensorSpec(())
+
     def time_step_spec(self):
         """Describes the ``TimeStep`` fields returned by ``step()``.
 
@@ -140,7 +162,8 @@ class AlfEnvironment(object):
             A ``TimeStep`` namedtuple containing (possibly nested) ``TensorSpec``s defining
             the step_type, reward, discount, observation, prev_action, and end_id.
         """
-        return time_step_spec(self.observation_spec(), self.action_spec())
+        return time_step_spec(self.observation_spec(), self.action_spec(),
+                              self.reward_spec())
 
     def current_time_step(self):
         """Returns the current timestep."""

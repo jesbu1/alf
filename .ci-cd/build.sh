@@ -42,20 +42,26 @@ function check_style() {
 function test() {
     cd alf
     pip3 install -e ./nest/cnest
+    export PYTHONPATH=$PYTHONPATH:`pwd`/nest/cnest
     python3 -m unittest -v \
         alf.algorithms.actor_critic_algorithm_test \
         alf.algorithms.actor_critic_loss_test \
         alf.algorithms.agent_test \
         alf.algorithms.algorithm_test \
+        alf.algorithms.data_transformer_test \
         alf.algorithms.ddpg_algorithm_test \
         alf.algorithms.diayn_algorithm_test \
         alf.algorithms.entropy_target_algorithm_test \
+        alf.algorithms.hypernetwork_algorithm_test \
         alf.algorithms.icm_algorithm_test \
         alf.algorithms.generator_test \
-        alf.algorithms.memory_test \
+        alf.algorithms.mcts_algorithm_test \
         alf.algorithms.merlin_algorithm_test \
         alf.algorithms.mi_estimator_test \
+        alf.algorithms.muzero_algorithm_test \
         alf.algorithms.ppo_algorithm_test \
+        alf.algorithms.predictive_representation_learner_test \
+        alf.algorithms.prior_actor_test \
         alf.algorithms.rl_algorithm_test \
         alf.algorithms.sarsa_algorithm_test \
         alf.algorithms.sac_algorithm_test \
@@ -69,9 +75,11 @@ function test() {
         alf.environments.process_environment_test \
         alf.environments.random_alf_environment_test \
         alf.environments.simple.noisy_array_test \
+        alf.environments.suite_go_test \
         alf.environments.suite_gym_test \
         alf.environments.suite_mario_test \
         alf.environments.suite_socialbot_test \
+        alf.environments.suite_tic_tac_toe_test \
         alf.environments.suite_unittest_test \
         alf.environments.alf_environment_test \
         alf.environments.alf_gym_wrapper_test \
@@ -89,14 +97,18 @@ function test() {
         alf.networks.critic_networks_test \
         alf.networks.value_networks_test \
         alf.networks.encoding_networks_test \
+        alf.networks.param_networks_test \
+        alf.networks.memory_test \
         alf.networks.projection_networks_test \
         alf.networks.q_networks_test \
+        alf.networks.relu_mlp_test \
         alf.optimizers.optimizers_test \
         alf.optimizers.trusted_updater_test \
         alf.summary.summary_ops_test \
         alf.tensor_specs_test \
         alf.trainers.policy_trainer_test \
         alf.utils.checkpoint_utils_test \
+        alf.utils.common_test \
         alf.utils.data_buffer_test \
         alf.utils.dist_utils_test \
         alf.utils.math_ops_test \

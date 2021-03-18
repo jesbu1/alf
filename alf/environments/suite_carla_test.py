@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -66,7 +66,7 @@ def play(env):
         "observation_desc: %s" % pprint.pformat(env.observation_desc()))
     logging.info("action_spec: %s" % pprint.pformat(env.action_spec()))
     logging.info("action_desc: %s" % pprint.pformat(env.action_desc()))
-    logging.info("Keyboard contorl:" + """
+    logging.info("Keyboard control:" + """
     W/UP         : throttle
     S/DOWN       : brake
     A/LEFT       : steer left
@@ -77,7 +77,6 @@ def play(env):
     """)
 
     action = env.action_spec().zeros([env.batch_size])
-    stop = False
     THROTTLE = 0
     STEER = 1
     BRAKE = 2
@@ -133,7 +132,12 @@ def play(env):
                 steer += steer_increment
         steer = min(0.7, max(-0.7, steer))
         action[:, STEER] = steer
-        env.step(action)
+
+        time_step = env.step(action)
+        if time_step.step_type[0] == alf.data_structures.StepType.LAST:
+            action = env.action_spec().zeros([env.batch_size])
+            steer = 0.
+
         env.render("human")
 
 
@@ -142,8 +146,14 @@ def main():
     if not FLAGS.manual:
         return False
 
+    logging.use_absl_handler()
     logging.set_verbosity(logging.INFO)
-    env = suite_carla.CarlaEnvironment(1, 'Town01')
+    env = suite_carla.CarlaEnvironment(
+        batch_size=1,
+        map_name='Town01',
+        num_other_vehicles=20,
+        num_walkers=20,
+        day_length=100)
     try:
         play(env)
     finally:

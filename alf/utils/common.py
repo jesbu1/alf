@@ -30,13 +30,13 @@ import time
 import torch
 import torch.distributions as td
 import torch.nn as nn
+import types
 from typing import Callable
 
 import alf
 import alf.nest as nest
 from alf.tensor_specs import TensorSpec, BoundedTensorSpec
 from alf.utils.spec_utils import zeros_from_spec as zero_tensor_from_nested_spec
-from alf.utils.normalizers import WindowNormalizer, EMNormalizer, AdaptiveNormalizer
 from . import dist_utils, gin_utils
 
 
@@ -154,8 +154,10 @@ def get_target_updater(models, target_models, tau=1.0, period=1, copy=True):
         w_t = (1 - \tau) * w_t + \tau * w_s.
 
     Args:
-        models (Network | list[Network]): the current model.
-        target_models (Network | list[Network]): the model to be updated.
+        models (Network | list[Network] | Parameter | list[Parameter] ): the
+            current model or parameter.
+        target_models (Network | list[Network] | Parameter | list[Parameter]):
+            the model or parameter to be updated.
         tau (float): A float scalar in :math:`[0, 1]`. Default :math:`\tau=1.0`
             means hard update.
         period (int): Step interval at which the target model is updated.
@@ -167,15 +169,31 @@ def get_target_updater(models, target_models, tau=1.0, period=1, copy=True):
     models = as_list(models)
     target_models = as_list(target_models)
 
-    if copy:
-        for model, target_model in zip(models, target_models):
-            for ws, wt in zip(model.parameters(), target_model.parameters()):
+    def _copy_model_or_parameter(s, t):
+        if isinstance(s, nn.Parameter):
+            t.data.copy_(s)
+        else:
+            for ws, wt in zip(s.parameters(), t.parameters()):
                 wt.data.copy_(ws)
 
-    def update():
+    def _lerp_model_or_parameter(s, t):
+        if isinstance(s, nn.Parameter):
+            t.data.lerp_(s, tau)
+        else:
+            for ws, wt in zip(s.parameters(), t.parameters()):
+                wt.data.lerp_(ws, tau)
+
+    if copy:
         for model, target_model in zip(models, target_models):
-            for ws, wt in zip(model.parameters(), target_model.parameters()):
-                wt.data.copy_((1 - tau) * wt + tau * ws)
+            _copy_model_or_parameter(model, target_model)
+
+    def update():
+        if tau != 1.0:
+            for model, target_model in zip(models, target_models):
+                _lerp_model_or_parameter(model, target_model)
+        else:
+            for model, target_model in zip(models, target_models):
+                _copy_model_or_parameter(model, target_model)
 
     return Periodically(update, period, 'periodic_update_targets')
 
@@ -191,9 +209,9 @@ def expand_dims_as(x, y):
     Returns:
         ``x`` with extra singular dimensions.
     """
-    assert len(x.shape) <= len(y.shape)
+    assert x.ndim <= y.ndim
     assert x.shape == y.shape[:len(x.shape)]
-    k = len(y.shape) - len(x.shape)
+    k = y.ndim - x.ndim
     if k == 0:
         return x
     else:
@@ -294,56 +312,9 @@ def image_scale_transformer(observation, fields=None, min=-1.0, max=1.0):
 
     fields = fields or [None]
     for field in fields:
-        observation = nest.utils.transform_nest(
+        observation = nest.transform_nest(
             nested=observation, field=field, func=_transform_image)
     return observation
-
-
-@gin.configurable
-def scale_transformer(observation, scale, dtype=torch.float32, fields=None):
-    """Scale observation
-
-    Args:
-         observation (nested Tensor): observation to be scaled
-         scale (float): scale factor
-         dtype (Dtype): The destination type.
-         fields (list[str]): fields to be scaled, A field str is a multi-level
-                path denoted by "A.B.C".
-    Returns:
-        scaled observation
-    """
-
-    def _scale_obs(obs):
-        return (obs * scale).type(dtype)
-
-    fields = fields or [None]
-    for field in fields:
-        observation = nest.utils.transform_nest(
-            nested=observation, field=field, func=_scale_obs)
-    return observation
-
-
-@gin.configurable
-def reward_clipping(r, minmax=(-1, 1)):
-    """
-    Clamp immediate rewards to the range :math:`[min, max]`.
-
-    Can be used as a reward shaping function passed to an algorithm
-    (e.g. ``ActorCriticAlgorithm``).
-    """
-    assert minmax[0] <= minmax[1], "range error"
-    return torch.clamp(r, minmax[0], minmax[1])
-
-
-@gin.configurable
-def reward_scaling(r, scale=1):
-    """
-    Scale immediate rewards by a factor of ``scale``.
-
-    Can be used as a reward shaping function passed to an algorithm
-    (e.g. ``ActorCriticAlgorithm``).
-    """
-    return r * scale
 
 
 def _markdownify_gin_config_str(string, description=''):
@@ -383,67 +354,6 @@ def _markdownify_gin_config_str(string, description=''):
             output_lines.append(procd_line)
 
     return '\n'.join(output_lines)
-
-
-@gin.configurable
-class ObservationNormalizer(nn.Module):
-    def __init__(self,
-                 observation_spec,
-                 clipping=0.,
-                 window_size=10000,
-                 update_rate=1e-4,
-                 speed=8.0,
-                 mode="adaptive"):
-        """Create an observation normalizer with optional value clipping to be
-        used as the ``observation_transformer`` of an algorithm. It will be called
-        before both ``rollout_step()`` and ``train_step()``.
-
-        The normalizer by default doesn't automatically update the mean and std.
-        Instead, it will check when ``self.forward()`` is called, whether an
-        algorithm is unrolling or training. It only updates the mean and std
-        during unroll. This is the suggested way of using an observation
-        normalizer (i.e., update the stats when encountering new data for the
-        first time). This same strategy has been used by OpenAI's baselines for
-        training their Robotics environments.
-
-        Args:
-            observation_spec (TensorSpec): the observation spec
-            clipping (float): a floating value for clipping the normalized
-                observation into ``[-clipping, clipping]``. Only valid if it's
-                greater than 0.
-            window_size (int): the window size of ``WindowNormalizer``.
-            update_rate (float): the update rate of ``EMNormalizer``.
-            speed (float): the speed of updating for ``AdaptiveNormalizer``.
-            mode (str): a value in ["adaptive", "window", "em"] indicates which
-                normalizer to use.
-        """
-        super().__init__()
-        self._clipping = float(clipping)
-        if mode == "adaptive":
-            self._normalizer = AdaptiveNormalizer(
-                tensor_spec=observation_spec,
-                speed=float(speed),
-                auto_update=False)
-        elif mode == "window":
-            self._normalzier = WindowNormalizer(
-                tensor_spec=observation_spec,
-                window_size=int(window_size),
-                auto_update=False)
-        elif mode == "em":
-            self._normalizer = EMNormalizer(
-                tensor_spec=observation_spec,
-                update_rate=float(update_rate),
-                auto_update=False)
-        else:
-            raise ValueError("Unsupported mode: " + mode)
-
-    def forward(self, observation):
-        """Normalize a given observation. If during unroll, then first update
-        the normalizer. The normalizer won't be updated in other circumstances.
-        """
-        if not is_training():
-            self._normalizer.update(observation)
-        return self._normalizer.normalize(observation, self._clipping)
 
 
 def get_gin_confg_strs():
@@ -565,14 +475,8 @@ def set_global_env(env):
 
 
 @gin.configurable
-def get_observation_spec(field=None):
+def get_raw_observation_spec(field=None):
     """Get the ``TensorSpec`` of observations provided by the global environment.
-
-    This spec is used for creating models only! All ``uint8`` dtype will be converted
-    to torch.float32 as a temporary solution, to be consistent with
-    ``image_scale_transformer()``. See
-
-    https://github.com/HorizonRobotics/alf/pull/239#issuecomment-544644558
 
     Args:
         field (str): a multi-step path denoted by "A.B.C".
@@ -581,10 +485,38 @@ def get_observation_spec(field=None):
     """
     assert _env, "set a global env by `set_global_env` before using the function"
     specs = _env.observation_spec()
-    specs = nest.map_structure(
-        lambda spec: (TensorSpec(spec.shape, torch.float32)
-                      if spec.dtype == torch.uint8 else spec), specs)
+    if field:
+        for f in field.split('.'):
+            specs = specs[f]
+    return specs
 
+
+_transformed_observation_spec = None
+
+
+def set_transformed_observation_spec(spec):
+    """Set the spec of the observation transformed by data transformers."""
+    global _transformed_observation_spec
+    _transformed_observation_spec = spec
+
+
+@gin.configurable
+def get_observation_spec(field=None):
+    """Get the spec of observation transformed by data transformers.
+
+    The data transformers are specified by ``TrainerConfig.data_transformer_ctor``.
+
+    Args:
+        field (str): a multi-step path denoted by "A.B.C".
+    Returns:
+        nested TensorSpec: a spec that describes the observation.
+    """
+    assert _transformed_observation_spec is not None, (
+        "This function should be "
+        "called after the global variable _transformed_observation_spec is set"
+    )
+
+    specs = _transformed_observation_spec
     if field:
         for f in field.split('.'):
             specs = specs[f]
@@ -705,11 +637,18 @@ def write_gin_configs(root_dir, gin_file):
 def warning_once(msg, *args):
     """Generate warning message once.
 
+    Note that the current implementation resembles that of the ``log_every_n()```
+    function in ``logging`` but reduces the calling stack by one to ensure
+    the multiple warning once messages generated at difference places can be
+    displayed correctly.
+
     Args:
         msg: str, the message to be logged.
         *args: The args to be substitued into the msg.
     """
-    logging.log_every_n(logging.WARNING, msg, 1 << 62, *args)
+    caller = logging.get_absl_logger().findCaller()
+    count = logging._get_next_log_count_per_token(caller)
+    logging.log_if(logging.WARNING, msg, not (count % (1 << 62)), *args)
 
 
 def set_random_seed(seed):
@@ -790,42 +729,114 @@ def detach(nests):
     return nest.map_structure(lambda t: t.detach(), nests)
 
 
-_training = False
+# A catch all mode.  Currently includes on-policy training on unrolled experience.
+EXE_MODE_OTHER = 0
+# Unroll during training
+EXE_MODE_ROLLOUT = 1
+# Replay, policy evaluation on experience and training
+EXE_MODE_REPLAY = 2
+# Evaluation / testing or playing a learned model
+EXE_MODE_EVAL = 3
+
+# Global execution mode to track where the program is in the RL training process.
+# This is used currently for observation normalization to only update statistics
+# during training (vs unroll).  This is also used in tensorboard plotting of
+# network output values, evaluation of the same network during rollout vs eval vs
+# replay will be plotted to different graphs.
+_exe_mode = EXE_MODE_OTHER
+_exe_mode_strs = ["other", "rollout", "replay", "eval"]
 
 
-def set_training(training=True):
+def set_exe_mode(mode):
     """Mark whether the current code belongs to unrolling or training. This flag
     might be used to change the behavior of some functions accordingly.
 
     Args:
         training (bool): True for training, False for unrolling
     """
-    global _training
-    _training = training
+    global _exe_mode
+    _exe_mode = mode
 
 
-def is_training():
+def exe_mode_name():
+    """return the execution mode as string.
+    """
+    return _exe_mode_strs[_exe_mode]
+
+
+def is_replay():
     """Return a bool value indicating whether the current code belongs to
     unrolling or training.
     """
-    return _training
+    return _exe_mode == EXE_MODE_REPLAY
 
 
-def mark_training(train_func):
-    """A decorator that will automatically mark the ``_training`` flag when
-    entering/exiting a training function.
+def is_rollout():
+    """Return a bool value indicating whether the current code belongs to
+    unrolling or training.
+    """
+    return _exe_mode == EXE_MODE_ROLLOUT
+
+
+def is_eval():
+    """Return a bool value indicating whether the current code belongs to
+    evaluation or playing a learned model.
+    """
+    return _exe_mode == EXE_MODE_EVAL
+
+
+def mark_eval(func):
+    """A decorator that will automatically mark the ``_exe_mode`` flag when
+    entering/exiting a evaluation/test function.
 
     Args:
-        train_func (Callable): a training function
+        func (Callable): a function
     """
 
-    def _train_func(*args, **kwargs):
-        set_training(True)
-        ret = train_func(*args, **kwargs)
-        set_training(False)
+    def _func(*args, **kwargs):
+        old_mode = _exe_mode
+        set_exe_mode(EXE_MODE_EVAL)
+        ret = func(*args, **kwargs)
+        set_exe_mode(old_mode)
         return ret
 
-    return _train_func
+    return _func
+
+
+def mark_replay(func):
+    """A decorator that will automatically mark the ``_exe_mode`` flag when
+    entering/exiting a experience replay function.
+
+    Args:
+        func (Callable): a function
+    """
+
+    def _func(*args, **kwargs):
+        old_mode = _exe_mode
+        set_exe_mode(EXE_MODE_REPLAY)
+        ret = func(*args, **kwargs)
+        set_exe_mode(old_mode)
+        return ret
+
+    return _func
+
+
+def mark_rollout(func):
+    """A decorator that will automatically mark the ``_exe_mode`` flag when
+    entering/exiting a rollout function.
+
+    Args:
+        func (Callable): a function
+    """
+
+    def _func(*args, **kwargs):
+        old_mode = _exe_mode
+        set_exe_mode(EXE_MODE_ROLLOUT)
+        ret = func(*args, **kwargs)
+        set_exe_mode(old_mode)
+        return ret
+
+    return _func
 
 
 @gin.configurable
@@ -863,3 +874,75 @@ def check_numerics(nested):
                                      nested, nested_finite)
         assert all(alf.nest.flatten(nested_finite)), (
             "Some tensor in nested is not finite: %s" % bad)
+
+
+def get_all_parameters(obj):
+    """Get all the parameters under ``obj`` and its descendents.
+
+    Note: This function assumes all the parameters can be reached through tuple,
+    list, dict, set, nn.Module or the attributes of an object. If a parameter is
+    held in a strange way, it will not be included by this function.
+
+    Args:
+        obj (object): will look for paramters under this object.
+    Returns:
+        list: list of (path, Parameters)
+    """
+    all_parameters = []
+    memo = set()
+    unprocessed = [(obj, '')]
+    # BFS for all subobjects
+    while unprocessed:
+        obj, path = unprocessed.pop(0)
+        if isinstance(obj, types.ModuleType):
+            # Do not traverse into a module. There are too much stuff inside a
+            # module.
+            continue
+        if isinstance(obj, nn.Parameter):
+            all_parameters.append((path, obj))
+            continue
+        if path:
+            path += '.'
+        if nest.is_namedtuple(obj):
+            for name, value in nest.extract_fields_from_nest(obj):
+                if id(value) not in memo:
+                    unprocessed.append((value, path + str(name)))
+                    memo.add(id(value))
+        elif isinstance(obj, dict):
+            # The keys of a generic dict are not necessarily str, and cannot be
+            # handled by nest.extract_fields_from_nest.
+            for name, value, in obj.items():
+                if id(value) not in memo:
+                    unprocessed.append((value, path + str(name)))
+                    memo.add(id(value))
+        elif isinstance(obj, (tuple, list, set)):
+            for i, value in enumerate(obj):
+                if id(value) not in memo:
+                    unprocessed.append((value, path + str(i)))
+                    memo.add(id(value))
+        elif isinstance(obj, nn.Module):
+            for name, m in obj.named_children():
+                if id(m) not in memo:
+                    unprocessed.append((m, path + name))
+                    memo.add(id(m))
+            for name, p in obj.named_parameters():
+                if id(p) not in memo:
+                    unprocessed.append((p, path + name))
+                    memo.add(id(p))
+        attribute_names = dir(obj)
+        for name in attribute_names:
+            if name.startswith('__') and name.endswith('__'):
+                # Ignore system attributes,
+                continue
+            attr = None
+            try:
+                attr = getattr(obj, name)
+            except:
+                # some attrbutes are property function, which may raise exception
+                # when called in a wrong context (e.g. Algorithm.experience_spec)
+                pass
+            if attr is None or id(attr) in memo:
+                continue
+            unprocessed.append((attr, path + name))
+            memo.add(id(attr))
+    return all_parameters

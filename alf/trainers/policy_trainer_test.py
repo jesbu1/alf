@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -12,16 +12,19 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+import functools
 import tempfile
 import torch
 
 import alf
+from alf.algorithms.hypernetwork_algorithm import HyperNetwork
 from alf.algorithms.rl_algorithm_test import MyEnv, MyAlg
-from alf.trainers.policy_trainer import Trainer, TrainerConfig, play
+from alf.trainers.policy_trainer import RLTrainer, TrainerConfig, play
+from alf.trainers.policy_trainer import create_dataset, SLTrainer
 from alf.utils import common
 
 
-class MyTrainer(Trainer):
+class MyRLTrainer(RLTrainer):
     def _create_environment(self,
                             nonparallel=False,
                             random_seed=None,
@@ -32,8 +35,14 @@ class MyTrainer(Trainer):
         return env
 
 
+class MySLTrainer(SLTrainer):
+    def _create_dataset(self):
+        return create_dataset(
+            dataset_name='test', train_batch_size=50, test_batch_size=10)
+
+
 class TrainerTest(alf.test.TestCase):
-    def test_trainer(self):
+    def test_rl_trainer(self):
         with tempfile.TemporaryDirectory() as root_dir:
             conf = TrainerConfig(
                 algorithm_ctor=MyAlg,
@@ -42,37 +51,76 @@ class TrainerTest(alf.test.TestCase):
                 num_iterations=100)
 
             # test train
-            trainer = MyTrainer(conf)
-            self.assertEqual(Trainer.progress(), 0)
+            trainer = MyRLTrainer(conf)
+            self.assertEqual(RLTrainer.progress(), 0)
             trainer.train()
-            self.assertEqual(Trainer.progress(), 1)
+            self.assertEqual(RLTrainer.progress(), 1)
 
             alg = trainer._algorithm
             env = common.get_env()
             time_step = common.get_initial_time_step(env)
             state = alg.get_initial_predict_state(env.batch_size)
             policy_step = alg.rollout_step(time_step, state)
-            logits = policy_step.info.base_dist.logits
+            logits = policy_step.info.logits
             print("logits: ", logits)
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 0]))
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 2]))
 
             # test checkpoint
             conf.num_iterations = 200
-            new_trainer = MyTrainer(conf)
+            new_trainer = MyRLTrainer(conf)
             new_trainer._restore_checkpoint()
-            self.assertEqual(Trainer.progress(), 0.5)
+            self.assertEqual(RLTrainer.progress(), 0.5)
             time_step = common.get_initial_time_step(env)
             state = alg.get_initial_predict_state(env.batch_size)
             policy_step = alg.rollout_step(time_step, state)
-            logits = policy_step.info.base_dist.logits
+            logits = policy_step.info.logits
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 0]))
             self.assertTrue(torch.all(logits[:, 1] > logits[:, 2]))
 
             new_trainer.train()
-            self.assertEqual(Trainer.progress(), 1)
+            self.assertEqual(RLTrainer.progress(), 1)
 
             # TODO: test play. Need real env to test.
+
+    def test_sl_trainer(self):
+        with tempfile.TemporaryDirectory() as root_dir:
+            conf = TrainerConfig(
+                algorithm_ctor=functools.partial(
+                    HyperNetwork,
+                    hidden_layers=None,
+                    loss_type='regression',
+                    optimizer=alf.optimizers.Adam(lr=1e-4, weight_decay=1e-4)),
+                root_dir=root_dir,
+                num_checkpoints=1,
+                evaluate=True,
+                eval_interval=1,
+                num_iterations=1)
+
+            # test train
+            trainer = MySLTrainer(conf)
+            self.assertEqual(SLTrainer.progress(), 0)
+            trainer.train()
+            self.assertEqual(SLTrainer.progress(), 1)
+
+            # test checkpoint
+            conf2 = TrainerConfig(
+                algorithm_ctor=functools.partial(
+                    HyperNetwork,
+                    hidden_layers=None,
+                    loss_type='regression',
+                    optimizer=alf.optimizers.Adam(lr=1e-4, weight_decay=1e-4)),
+                root_dir=root_dir,
+                num_checkpoints=1,
+                evaluate=True,
+                eval_interval=1,
+                num_iterations=2)
+
+            new_trainer = MySLTrainer(conf2)
+            new_trainer._restore_checkpoint()
+            self.assertEqual(SLTrainer.progress(), 0.5)
+            new_trainer.train()
+            self.assertEqual(SLTrainer.progress(), 1)
 
 
 if __name__ == "__main__":

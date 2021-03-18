@@ -58,11 +58,11 @@ def histogram_discrete(name, data, bucket_min, bucket_max, step=None):
         step (None|Tensor): step value for this summary. this defaults to
             ``alf.summary.get_global_counter()``
     """
-    alf.summary.histogram(
-        name,
-        data,
-        step=step,
-        bins=torch.arange(bucket_min, bucket_max + 1).cpu())
+    bins = torch.arange(bucket_min, bucket_max + 1).cpu()
+    # For N bins, there should be N+1 bin edges
+    bin_edges = bins.to(torch.float32) - 0.5
+    bin_edges = torch.cat([bin_edges, bin_edges[-1:] + 1.])
+    alf.summary.histogram(name, data, step=step, bins=bin_edges)
 
 
 @_summary_wrapper
@@ -148,6 +148,7 @@ def summarize_gradients(name_and_params, with_histogram=True):
 alf.summary.histogram = _summary_wrapper(alf.summary.histogram)
 
 
+@_summary_wrapper
 def add_nested_summaries(prefix, data):
     """Add summary of a nest of data.
 
@@ -163,13 +164,15 @@ def add_nested_summaries(prefix, data):
             alf.summary.scalar(name, elem)
 
 
+@_summary_wrapper
 def summarize_loss(loss_info: LossInfo):
     """Add summary about ``loss_info``
 
     Args:
         loss_info (LossInfo): ``loss_info.extra`` must be a namedtuple
     """
-    alf.summary.scalar('loss', data=loss_info.loss)
+    if not isinstance(loss_info.loss, tuple):
+        alf.summary.scalar('loss', data=loss_info.loss)
     if not loss_info.extra:
         return
     # Support extra as namedtuple or dict (more flexible)
@@ -177,6 +180,15 @@ def summarize_loss(loss_info: LossInfo):
         add_nested_summaries('loss', loss_info.extra)
 
 
+@_summary_wrapper
+def summarize_nest(prefix, nest):
+    def _summarize(path, tensor):
+        add_mean_hist_summary(prefix + "/" + path, tensor)
+
+    alf.nest.py_map_structure_with_path(_summarize, nest)
+
+
+@_summary_wrapper
 def summarize_action(actions, action_specs, name="action"):
     """Generate histogram summaries for actions.
 
@@ -185,6 +197,7 @@ def summarize_action(actions, action_specs, name="action"):
     Args:
         actions (nested Tensor): actions to be summarized
         action_specs (nested TensorSpec): spec for the actions
+        name (str): name of the summary
     """
     action_specs = alf.nest.flatten(action_specs)
     actions = alf.nest.flatten(actions)
@@ -211,12 +224,15 @@ def summarize_action(actions, action_specs, name="action"):
 
             for a in range(action_dim):
                 histogram_continuous(
-                    name="%s/%s/%s" % (name, i, a),
+                    name="%s/%s/%s/value" % (name, i, a),
                     data=action[:, a],
                     bucket_min=_get_val(action_spec.minimum, a),
                     bucket_max=_get_val(action_spec.maximum, a))
+                alf.summary.scalar("%s/%s/%s/mean" % (name, i, a),
+                                   action[:, a].mean())
 
 
+@_summary_wrapper
 def summarize_action_dist(action_distributions, name="action_dist"):
     """Generate summary for action distributions.
 
@@ -232,21 +248,21 @@ def summarize_action_dist(action_distributions, name="action_dist"):
             # dist might be a Tensor
             action_dim = dist.shape[-1]
             for a in range(action_dim):
-                alf.summary.histogram(
-                    name="%s_loc/%s/%s" % (name, i, a), data=dist[..., a])
+                add_mean_hist_summary("%s_loc/%s/%s" % (name, i, a),
+                                      dist[..., a])
         else:
             dist = dist_utils.get_base_dist(dist)
-            if not isinstance(dist, td.Normal):
+            if not (isinstance(dist, td.Normal)
+                    or isinstance(dist, dist_utils.StableCauchy)):
                 continue
             loc = dist.loc
             log_scale = dist.scale.log()
             action_dim = loc.shape[-1]
             for a in range(action_dim):
-                alf.summary.histogram(
-                    name="%s_log_scale/%s/%s" % (name, i, a),
-                    data=log_scale[..., a])
-                alf.summary.histogram(
-                    name="%s_loc/%s/%s" % (name, i, a), data=loc[..., a])
+                add_mean_hist_summary("%s_log_scale/%s/%s" % (name, i, a),
+                                      log_scale[..., a])
+                add_mean_hist_summary("%s_loc/%s/%s" % (name, i, a),
+                                      loc[..., a])
 
 
 def add_mean_hist_summary(name, value):
@@ -289,7 +305,7 @@ def add_mean_summary(name, value):
     alf.summary.scalar(name, value.mean())
 
 
-def safe_mean_summary(name, value):
+def safe_mean_summary(name, value, mask=None):
     """Generate mean summary of ``value``.
 
     It skips the summary if ``value`` is empty.
@@ -297,7 +313,11 @@ def safe_mean_summary(name, value):
     Args:
         name (str): name of the summary
         value (Tensor): tensor to be summarized
+        mask (bool Tensor): optional mask to indicate which element of value
+            to use. Its shape needs to be same as that of ``value``
     """
+    if mask is not None:
+        value = value[mask]
     if np.prod(value.shape) > 0:
         add_mean_summary(name, value)
 

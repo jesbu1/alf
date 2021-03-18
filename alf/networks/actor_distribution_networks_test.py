@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -148,8 +148,7 @@ class TestActorDistributionNetworks(parameterized.TestCase, alf.test.TestCase):
             isinstance(actor_dist_net.output_spec["continuous"],
                        DistributionSpec))
 
-        self.assertTrue(
-            isinstance(act_dist["discrete"].base_dist, td.Categorical))
+        self.assertTrue(isinstance(act_dist["discrete"], td.Categorical))
         self.assertTrue(
             isinstance(act_dist["continuous"].base_dist, td.Normal))
 

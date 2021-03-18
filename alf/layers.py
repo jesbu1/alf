@@ -19,6 +19,7 @@ import copy
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 
 from alf.initializers import variance_scaling_init
 from alf.nest.utils import get_outer_rank
@@ -53,6 +54,74 @@ def normalize_along_batch_dims(x, mean, variance, variance_epsilon):
 
     x = bs.unflatten(x)
     return x
+
+
+class Identity(nn.Module):
+    """A layer that simply returns its argument as result."""
+
+    def __init__(self):
+        super().__init__()
+
+    def forward(self, x):
+        return x
+
+
+class Cast(nn.Module):
+    """A layer that cast the dtype of the elements of the input tensor."""
+
+    def __init__(self, dtype=torch.float32):
+        """
+        Args:
+            dtype (torch.dtype): desired type of the new tensor.
+        """
+        super().__init__()
+        self._dtype = dtype
+
+    def forward(self, x):
+        return x.to(self._dtype)
+
+
+class Transpose(nn.Module):
+    """A layer that perform the transpose of channels.
+
+    Note that batch dimention is not considered for transpose. This means that
+    dim0=0 means the dimension after batch dimension.
+    """
+
+    def __init__(self, dim0=0, dim1=1):
+        """
+        Args:
+            dim0 (int): the first dimension to be transposed.
+            dim1 (int): the second dimension to be transposed
+        """
+        super().__init__()
+        if dim0 >= 0:
+            dim0 += 1
+        self._dim0 = dim0
+        if dim1 >= 0:
+            dim1 += 1
+        self._dim1 = dim1
+
+    def forward(self, x):
+        return x.transpose(self._dim0, self._dim1)
+
+
+class Permute(nn.Module):
+    """A layer that perform the permutation of channels."""
+
+    def __init__(self, *dims):
+        """
+        Args:
+            *dims: The desired ordering of dimensions (not including batch dimension)
+        """
+        super().__init__()
+        assert all([d >= 0 for d in dims
+                    ]), ("dims should be non-negative. Got %s" % str(dims))
+        dims = [1 + d for d in dims]
+        self._dims = [0] + dims
+
+    def forward(self, x):
+        return x.permute(*self._dims)
 
 
 class BatchSquash(object):
@@ -113,13 +182,15 @@ class OneHot(nn.Module):
 
 @gin.configurable
 class FixedDecodingLayer(nn.Module):
+    """A layer that uses a set of fixed basis for decoding the inputs."""
+
     def __init__(self,
                  input_size,
                  output_size,
                  basis_type="rbf",
                  sigma=1.,
                  tau=0.5):
-        """A layer that uses a set of fixed basis for decoding the inputs.
+        """
         Args:
             input_size (int): the size of input to be decoded, representing the
                 number of representation coefficients
@@ -151,7 +222,8 @@ class FixedDecodingLayer(nn.Module):
         def _polyvander_matrix(n, D, tau=tau):
             # non-square matrix [n, D + 1]
             x = torch.linspace(-1, 1, n)
-            B = torch.as_tensor(np.polynomial.polynomial.polyvander(x, D))
+            B = torch.as_tensor(
+                np.polynomial.polynomial.polyvander(x.cpu(), D))
             # weight for encoding the preference to low-frequency basis
             exp_factor = torch.arange(D + 1).float()
             basis_weight = tau**exp_factor
@@ -233,11 +305,15 @@ class FixedDecodingLayer(nn.Module):
 
 @gin.configurable
 class FC(nn.Module):
+    """Fully connected layer."""
+
     def __init__(self,
                  input_size,
                  output_size,
                  activation=identity,
                  use_bias=True,
+                 use_bn=False,
+                 use_ln=False,
                  kernel_initializer=None,
                  kernel_init_gain=1.0,
                  bias_init_value=0.0):
@@ -251,6 +327,8 @@ class FC(nn.Module):
             output_size (int): output size
             activation (torch.nn.functional):
             use_bias (bool): whether use bias
+            use_bn (bool): whether use batch normalization.
+            use_ln (bool): whether use layer normalization
             kernel_initializer (Callable): initializer for the FC layer kernel.
                 If none is provided a ``variance_scaling_initializer`` with gain as
                 ``kernel_init_gain`` will be used.
@@ -267,35 +345,78 @@ class FC(nn.Module):
         super(FC, self).__init__()
 
         self._activation = activation
-        self._linear = nn.Linear(input_size, output_size, bias=use_bias)
+        self._weight = nn.Parameter(torch.Tensor(output_size, input_size))
+        if use_bias:
+            self._bias = nn.Parameter(torch.Tensor(output_size))
+        else:
+            self._bias = None
+
         self._kernel_initializer = kernel_initializer
         self._kernel_init_gain = kernel_init_gain
         self._bias_init_value = bias_init_value
         self._use_bias = use_bias
+        self._use_bn = use_bn
+        self._use_ln = use_ln
+        if use_bn:
+            self._bn = nn.BatchNorm1d(output_size)
+        else:
+            self._bn = None
+        if use_ln:
+            self._ln = nn.LayerNorm(output_size)
+        else:
+            self._ln = None
         self.reset_parameters()
 
     def reset_parameters(self):
+        """Initialize the parameters."""
         if self._kernel_initializer is None:
             variance_scaling_init(
-                self._linear.weight.data,
+                self._weight.data,
                 gain=self._kernel_init_gain,
                 nonlinearity=self._activation)
         else:
-            self._kernel_initializer(self._linear.weight.data)
+            self._kernel_initializer(self._weight.data)
 
         if self._use_bias:
-            nn.init.constant_(self._linear.bias.data, self._bias_init_value)
+            nn.init.constant_(self._bias.data, self._bias_init_value)
+
+        if self._use_ln:
+            self._ln.reset_parameters()
+        if self._use_bn:
+            self._bn.reset_parameters()
 
     def forward(self, inputs):
-        return self._activation(self._linear(inputs))
+        """Forward computation.
+
+        Args:
+            inputs (Tensor): its shape should be ``[batch_size, input_size]`` or
+                ``[batch_size, ..., input_size]``
+        Returns:
+            Tensor: with shape as ``inputs.shape[:-1] + (output_size,)``
+        """
+        if inputs.dim() == 2 and self._use_bias:
+            y = torch.addmm(self._bias, inputs, self._weight.t())
+        else:
+            y = inputs.matmul(self._weight.t())
+            if self._use_bias:
+                y += self._bias
+        if self._use_ln:
+            if not self._use_bias:
+                self._ln.bias.data.zero_()
+            y = self._ln(y)
+        if self._use_bn:
+            if not self._use_bias:
+                self._bn.bias.data.zero_()
+            y = self._bn(y)
+        return self._activation(y)
 
     @property
     def weight(self):
-        return self._linear.weight
+        return self._weight
 
     @property
     def bias(self):
-        return self._linear.bias
+        return self._bias
 
     def make_parallel(self, n):
         """Create a ``ParallelFC`` using ``n`` replicas of ``self``.
@@ -304,19 +425,162 @@ class FC(nn.Module):
         return ParallelFC(n=n, **self._kwargs)
 
 
+class FCBatchEnsemble(FC):
+    r"""The BatchEnsemble for FC layer.
+
+    BatchEnsemble is proposed in `Wen et. al. BatchEnsemble: An Alternative Approach
+    to Efficient Ensemble and Lifelong Learning <https://arxiv.org/abs/2002.06715>`_
+
+    In a nutshell, a tuple of vector :math:`(r_k, s_k)` is maintained for ensemble
+    member k in addition to the original FC weight matrix w. For input x, the
+    result for ensemble member k is calculated as :math:`(W \circ (s_k r_k^T)) x`.
+    This can be more efficiently calculated as :math:`(W (x \circ r_k)) \circ s_k`.
+    Note that for each sample in a batch, a random ensemble member will used for it
+    if ``ensemble_ids`` is not provided to ``forward()``.
+
+    """
+
+    def __init__(self,
+                 input_size,
+                 output_size,
+                 ensemble_size,
+                 output_ensemble_ids=True,
+                 activation=identity,
+                 use_bias=True,
+                 use_bn=False,
+                 use_ln=False,
+                 kernel_initializer=None,
+                 kernel_init_gain=1.0,
+                 bias_init_range=0.):
+        """
+        Args:
+            input_size (int): input size
+            output_size (int): output size
+            ensemble_size (int): ensemble size
+            output_ensemble_ids (bool): If True, the forward() function will return
+                a tuple of (result, ensemble_ids). If False, the forward() function
+                will return result only.
+            activation (Callable): activation function
+            use_bias (bool): whether use bias
+            use_bn (bool): whether use batch normalization.
+            use_ln (bool): whether use layer normalization
+            kernel_initializer (Callable): initializer for the FC layer kernel.
+                If none is provided a ``variance_scaling_initializer`` with gain as
+                ``kernel_init_gain`` will be used.
+            kernel_init_gain (float): a scaling factor (gain) applied to
+                the std of kernel init distribution. It will be ignored if
+                ``kernel_initializer`` is not None.
+            bias_init_range (float): biases are initialized uniformly in
+                [-bias_init_range, bias_init_range]
+        """
+        nn.Module.__init__(self)
+        self._r = nn.Parameter(torch.Tensor(ensemble_size, input_size))
+        self._s = nn.Parameter(torch.Tensor(ensemble_size, output_size))
+        self._ensemble_bias = nn.Parameter(
+            torch.Tensor(ensemble_size, output_size))
+        self._use_ensemble_bias = use_bias
+        self._ensemble_size = ensemble_size
+        self._output_ensemble_ids = output_ensemble_ids
+        self._bias_init_range = bias_init_range
+        super().__init__(
+            input_size,
+            output_size,
+            activation=activation,
+            use_bias=False,
+            use_bn=use_bn,
+            use_ln=use_ln,
+            kernel_initializer=kernel_initializer,
+            kernel_init_gain=kernel_init_gain)
+
+    def reset_parameters(self):
+        """Reinitialize parameters."""
+        super().reset_parameters()
+        # Both r and s are initialized to +1/-1 according to Appendix B
+        torch.randint(
+            2, size=self._r.shape, dtype=torch.float32, out=self._r.data)
+        torch.randint(
+            2, size=self._s.shape, dtype=torch.float32, out=self._s.data)
+        self._r.data.mul_(2)
+        self._r.data.sub_(1)
+        self._s.data.mul_(2)
+        self._s.data.sub_(1)
+        if self._use_bias:
+            nn.init.uniform_(
+                self._ensemble_bias.data,
+                a=-self._bias_init_range,
+                b=self._bias_init_range)
+
+    def forward(self, inputs):
+        """Forward computation.
+
+        Args:
+            inputs (Tensor|tuple): if a Tensor, its shape should be ``[batch_size, input_size]`` or
+                ``[batch_size, ..., input_size]``. And a random ensemble id will be
+                generated for each sample in the batch. If a tuple, it should
+                contain two tensors. The first one is the data tensor with shape
+                ``[batch_size, input_size]`` or ``[batch_size, ..., input_size]``.
+                The second one is ensemble_ids indicating which ensemble member each
+                sample should use. Its shape should be [batch_size], and all elements
+                should be in [0, ensemble_size).
+        Returns:
+            tuple if ``output_ensemble_ids`` is True,
+            - Tensor: with shape as ``inputs.shape[:-1] + (output_size,)``
+            - LongTensor: if enseble_ids is provided, this is same as ``ensemble_ids``,
+                otherwise a randomly generated ensemble_ids is returned
+            Tensor if ``output_ensemble_ids`` is False. The result of FC.
+        """
+        if type(inputs) == tuple:
+            inputs, ensemble_ids = inputs
+        else:
+            ensemble_ids = torch.randint(
+                self._ensemble_size, size=(inputs.shape[0], ))
+        batch_size = inputs.shape[0]
+        output_size, input_size = self._weight.shape
+        r = self._r[ensemble_ids]  # [batch_size, input_size]
+        s = self._s[ensemble_ids]  # [batch_size, output_size]
+        if inputs.ndim > 2:
+            ones = [1] * (inputs.ndim - 2)
+            r = r.reshape(batch_size, *ones, input_size)
+            s = s.reshape(batch_size, *ones, output_size)
+        y = (inputs * r).matmul(self._weight.t())
+        y = y * s
+        if self._use_ensemble_bias:
+            bias = self._ensemble_bias[ensemble_ids]
+            if inputs.ndim > 2:
+                bias = bias.reshape(batch_size, *ones, output_size)
+            y += bias
+        if self._use_ln:
+            if not self._use_ensemble_bias:
+                self._ln.bias.data.zero_()
+            y = self._ln(y)
+        if self._use_bn:
+            if not self._use_ensemble_bias:
+                self._bn.bias.data.zero_()
+            y = self._bn(y)
+
+        y = self._activation(y)
+        if self._output_ensemble_ids:
+            return y, ensemble_ids
+        else:
+            return y
+
+
 @gin.configurable
 class ParallelFC(nn.Module):
+    """Parallel FC layer."""
+
     def __init__(self,
                  input_size,
                  output_size,
                  n,
                  activation=identity,
                  use_bias=True,
+                 use_bn=False,
+                 use_ln=False,
                  kernel_initializer=None,
                  kernel_init_gain=1.0,
                  bias_init_value=0.0):
-        """Parallel FC layer.
-
+        """
         It is equivalent to ``n`` separate FC layers with the same
         ``input_size`` and ``output_size``.
 
@@ -325,6 +589,8 @@ class ParallelFC(nn.Module):
             output_size (int): output size
             n (int): n independent ``FC`` layers
             activation (torch.nn.functional):
+            use_bn (bool): whether use Batch Normalization.
+            use_ln (bool): whether use layer normalization
             use_bias (bool): whether use bias
             kernel_initializer (Callable): initializer for the FC layer kernel.
                 If none is provided a ``variance_scaling_initializer`` with gain
@@ -353,6 +619,15 @@ class ParallelFC(nn.Module):
 
         if use_bias:
             nn.init.constant_(self._bias.data, bias_init_value)
+        if use_bn:
+            self._bn = nn.BatchNorm1d(n * output_size)
+        else:
+            self._bn = None
+
+        if use_ln:
+            self._ln = nn.GroupNorm(n, n * output_size)
+        else:
+            self._ln = None
 
     def forward(self, inputs):
         """Forward
@@ -383,6 +658,18 @@ class ParallelFC(nn.Module):
         else:
             y = torch.bmm(inputs, self._weight.transpose(1, 2))  # [n, B, k]
         y = y.transpose(0, 1)  # [B, n, k]
+        if self._ln is not None:
+            if self._bias is None:
+                self._ln.bias.data.zero_()
+            y1 = y.reshape(-1, n * k)
+            y = self._ln(y1)
+            y = y1.view(-1, n, k)
+        if self._bn is not None:
+            if self._bias is None:
+                self._bn.bias.data.zero_()
+            y1 = y.reshape(-1, n * k)
+            y1 = self._bn(y1)
+            y = y1.view(-1, n, k)
         return self._activation(y)
 
     @property
@@ -410,6 +697,8 @@ class ParallelFC(nn.Module):
 
 @gin.configurable
 class Conv2D(nn.Module):
+    """2D Convolution Layer."""
+
     def __init__(self,
                  in_channels,
                  out_channels,
@@ -417,7 +706,8 @@ class Conv2D(nn.Module):
                  activation=torch.relu_,
                  strides=1,
                  padding=0,
-                 use_bias=True,
+                 use_bias=None,
+                 use_bn=False,
                  kernel_initializer=None,
                  kernel_init_gain=1.0,
                  bias_init_value=0.0):
@@ -433,7 +723,8 @@ class Conv2D(nn.Module):
             activation (torch.nn.functional):
             strides (int or tuple):
             padding (int or tuple):
-            use_bias (bool):
+            use_bias (bool|None): whether use bias. If None, will use ``not use_bn``
+            use_bn (bool): whether use batch normalization
             kernel_initializer (Callable): initializer for the conv layer kernel.
                 If None is provided a variance_scaling_initializer with gain as
                 ``kernel_init_gain`` will be used.
@@ -443,6 +734,8 @@ class Conv2D(nn.Module):
             bias_init_value (float): a constant
         """
         super(Conv2D, self).__init__()
+        if use_bias is None:
+            use_bias = not use_bn
         self._activation = activation
         self._conv2d = nn.Conv2d(
             in_channels,
@@ -452,19 +745,36 @@ class Conv2D(nn.Module):
             padding=padding,
             bias=use_bias)
 
-        if kernel_initializer is None:
+        self._kernel_initializer = kernel_initializer
+        self._kernel_init_gain = kernel_init_gain
+        self._bias_init_value = bias_init_value
+        self._use_bias = use_bias
+        if use_bn:
+            self._bn = nn.BatchNorm2d(out_channels)
+        else:
+            self._bn = None
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """Initialize the parameters."""
+        if self._kernel_initializer is None:
             variance_scaling_init(
                 self._conv2d.weight.data,
-                gain=kernel_init_gain,
+                gain=self._kernel_init_gain,
                 nonlinearity=self._activation)
         else:
-            kernel_initializer(self._conv2d.weight.data)
-
-        if use_bias:
-            nn.init.constant_(self._conv2d.bias.data, bias_init_value)
+            self._kernel_initializer(self._conv2d.weight.data)
+        if self._use_bias:
+            nn.init.constant_(self._conv2d.bias.data, self._bias_init_value)
+        if self._bn is not None:
+            self._bn.reset_parameters()
 
     def forward(self, img):
-        return self._activation(self._conv2d(img))
+        y = self._conv2d(img)
+        if self._bn is not None:
+            y = self._bn(y)
+        return self._activation(y)
 
     @property
     def weight(self):
@@ -485,7 +795,8 @@ class ParallelConv2D(nn.Module):
                  activation=torch.relu_,
                  strides=1,
                  padding=0,
-                 use_bias=True,
+                 use_bias=None,
+                 use_bn=False,
                  kernel_initializer=None,
                  kernel_init_gain=1.0,
                  bias_init_value=0.0):
@@ -503,7 +814,8 @@ class ParallelConv2D(nn.Module):
             activation (torch.nn.functional):
             strides (int or tuple):
             padding (int or tuple):
-            use_bias (bool):
+            use_bias (bool|None): whether use bias. If None, will use ``not use_bn``
+            use_bn (bool): whether use batch normalization
             kernel_initializer (Callable): initializer for the conv layer kernel.
                 If None is provided a ``variance_scaling_initializer`` with gain
                 as ``kernel_init_gain`` will be used.
@@ -513,6 +825,8 @@ class ParallelConv2D(nn.Module):
             bias_init_value (float): a constant
         """
         super(ParallelConv2D, self).__init__()
+        if use_bias is None:
+            use_bias = not use_bn
         self._activation = activation
         self._n = n
         self._in_channels = in_channels
@@ -550,6 +864,11 @@ class ParallelConv2D(nn.Module):
             self._bias = self._conv2d.bias.view(self._n, self._out_channels)
         else:
             self._bias = None
+
+        if use_bn:
+            self._bn = nn.BatchNorm2d(n * out_channels)
+        else:
+            self._bn = None
 
     def forward(self, img):
         """Forward
@@ -600,12 +919,15 @@ class ParallelConv2D(nn.Module):
         img = img.reshape(img.shape[0], img.shape[1] * img.shape[2],
                           *img.shape[3:])
 
-        res = self._activation(self._conv2d(img))
+        res = self._conv2d(img)
+
+        if self._bn is not None:
+            res = self._bn(res)
 
         # reshape back: [B, n*C', H', W'] -> [B, n, C', H', W']
         res = res.reshape(res.shape[0], self._n, self._out_channels,
                           *res.shape[2:])
-        return res
+        return self._activation(res)
 
     @property
     def weight(self):
@@ -625,7 +947,8 @@ class ConvTranspose2D(nn.Module):
                  activation=torch.relu_,
                  strides=1,
                  padding=0,
-                 use_bias=True,
+                 use_bias=None,
+                 use_bn=False,
                  kernel_initializer=None,
                  kernel_init_gain=1.0,
                  bias_init_value=0.0):
@@ -642,7 +965,8 @@ class ConvTranspose2D(nn.Module):
             activation (torch.nn.functional):
             strides (int or tuple):
             padding (int or tuple):
-            use_bias (bool):
+            use_bias (bool|None): If None, will use ``not use_bn``
+            use_bn (bool): whether use batch normalization
             kernel_initializer (Callable): initializer for the conv_trans layer.
                 If None is provided a variance_scaling_initializer with gain as
                 ``kernel_init_gain`` will be used.
@@ -652,6 +976,8 @@ class ConvTranspose2D(nn.Module):
             bias_init_value (float): a constant
         """
         super(ConvTranspose2D, self).__init__()
+        if use_bias is None:
+            use_bias = not use_bn
         self._activation = activation
         self._conv_trans2d = nn.ConvTranspose2d(
             in_channels,
@@ -672,8 +998,16 @@ class ConvTranspose2D(nn.Module):
         if use_bias:
             nn.init.constant_(self._conv_trans2d.bias.data, bias_init_value)
 
+        if use_bn:
+            self._bn = nn.BatchNorm2d(out_channels)
+        else:
+            self._bn = None
+
     def forward(self, img):
-        return self._activation(self._conv_trans2d(img))
+        y = self._conv_trans2d(img)
+        if self._bn is not None:
+            y = self._bn(y)
+        return self._activation(y)
 
     @property
     def weight(self):
@@ -694,7 +1028,8 @@ class ParallelConvTranspose2D(nn.Module):
                  activation=torch.relu_,
                  strides=1,
                  padding=0,
-                 use_bias=True,
+                 use_bias=None,
+                 use_bn=False,
                  kernel_initializer=None,
                  kernel_init_gain=1.0,
                  bias_init_value=0.0):
@@ -709,7 +1044,8 @@ class ParallelConvTranspose2D(nn.Module):
             activation (torch.nn.functional):
             strides (int or tuple):
             padding (int or tuple):
-            use_bias (bool):
+            use_bias (bool|None): If None, will use ``not use_bn``
+            use_bn (bool):
             kernel_initializer (Callable): initializer for the conv_trans layer.
                 If None is provided a ``variance_scaling_initializer`` with gain
                 as ``kernel_init_gain`` will be used.
@@ -719,6 +1055,8 @@ class ParallelConvTranspose2D(nn.Module):
             bias_init_value (float): a constant
         """
         super(ParallelConvTranspose2D, self).__init__()
+        if use_bias is None:
+            use_bias = not use_bn
         self._activation = activation
         self._n = n
         self._in_channels = in_channels
@@ -757,6 +1095,11 @@ class ParallelConvTranspose2D(nn.Module):
                                                       self._out_channels)
         else:
             self._bias = None
+
+        if use_bn:
+            self._bn = nn.BatchNorm2d(n * out_channels)
+        else:
+            self._bn = None
 
     def forward(self, img):
         """Forward
@@ -806,12 +1149,13 @@ class ParallelConvTranspose2D(nn.Module):
         img = img.reshape(img.shape[0], img.shape[1] * img.shape[2],
                           *img.shape[3:])
 
-        res = self._activation(self._conv_trans2d(img))
-
+        res = self._conv_trans2d(img)
+        if self._bn is not None:
+            res = self._bn(res)
         # reshape back: [B, n*C', H', W'] -> [B, n, C', H', W']
         res = res.reshape(res.shape[0], self._n, self._out_channels,
                           res.shape[2], res.shape[3])
-        return res
+        return self._activation(res)
 
     @property
     def weight(self):
@@ -822,6 +1166,379 @@ class ParallelConvTranspose2D(nn.Module):
         return self._bias
 
 
+@gin.configurable
+class ParamFC(nn.Module):
+    def __init__(self,
+                 input_size,
+                 output_size,
+                 activation=torch.relu_,
+                 use_bias=True,
+                 kernel_initializer=None,
+                 kernel_init_gain=1.0,
+                 bias_init_value=0.0):
+        """A fully connected layer that does not maintain its own weight and bias,
+        but accepts both from users. If the given parameter (weight and bias) 
+        tensor has an extra batch dimension (first dimension), it performs
+        parallel FC operation. 
+
+        Args:
+            input_size (int): input size
+            output_size (int): output size
+            activation (torch.nn.functional):
+            use_bias (bool): whether use bias
+        """
+        super(ParamFC, self).__init__()
+
+        self._input_size = input_size
+        self._output_size = output_size
+        self._activation = activation
+        self._use_bias = use_bias
+        self._kernel_initializer = kernel_initializer
+        self._kernel_init_gain = kernel_init_gain
+        self._bias_init_value = bias_init_value
+
+        self._weight_length = output_size * input_size
+        self.set_weight(torch.randn(1, self._weight_length))
+        if use_bias:
+            self._bias_length = output_size
+            self.set_bias(torch.randn(1, self._bias_length))
+        else:
+            self._bias_length = 0
+            self._bias = None
+
+    @property
+    def weight(self):
+        """Get stored weight tensor or batch of weight tensors."""
+        return self._weight
+
+    @property
+    def bias(self):
+        """Get stored bias tensor or batch of bias tensors."""
+        return self._bias
+
+    @property
+    def weight_length(self):
+        """Get the n_element of a single weight tensor. """
+        return self._weight_length
+
+    @property
+    def bias_length(self):
+        """Get the n_element of a single bias tensor. """
+        return self._bias_length
+
+    def set_weight(self, weight, reinitialize=False):
+        """Store a weight tensor or batch of weight tensors.
+
+        Args:
+            weight (torch.Tensor): with shape ``[B, D]``
+                where the mining of the symbols are:
+                - ``B``: batch size
+                - ``D``: length of weight vector, should be self._weight_length
+            reinitialize (bool): whether to reinitialize self._weight
+        """
+        assert (weight.ndim == 2 and weight.shape[1] == self._weight_length), (
+            "Input weight has wrong shape %s. Expecting shape (n, %d)" %
+            (weight.shape, self._weight_length))
+        self._groups = weight.shape[0]
+        weight = weight.view(self._groups, self._output_size, self._input_size)
+        if reinitialize:
+            for i in range(self._groups):
+                if self._kernel_initializer is None:
+                    variance_scaling_init(
+                        weight[i],
+                        gain=self._kernel_init_gain,
+                        nonlinearity=self._activation)
+                else:
+                    self._kernel_initializer(weight[i])
+
+        self._weight = weight
+
+    def set_bias(self, bias, reinitialize=False):
+        """Store a bias tensor or batch of bias tensors.
+
+        Args:
+            bias (torch.Tensor): with shape ``[B, D]``
+                where the mining of the symbols are:
+                - ``B``: batch size
+                - ``D``: length of bias vector, should be self._bias_length
+            reinitialize (bool): whether to reinitialize self._bias
+        """
+        assert (bias.ndim == 2 and bias.shape[1] == self._bias_length), (
+            "Input bias has wrong shape %s. Expecting shape (n, %d)" %
+            (bias.shape, self._bias_length))
+        assert bias.shape[0] == self._groups, (
+            "Input bias has wrong shape %s. Expecting shape (%d, %d)" %
+            (bias.shape, self._group, self.bias_length))
+
+        if reinitialize:
+            if self._use_bias:
+                nn.init.constant_(bias, self._bias_init_value)
+
+        self._bias = bias  # [n, bias_length]
+
+    def forward(self, inputs):
+        """Forward
+
+        Args:
+            inputs (torch.Tensor): with shape ``[B, D] (groups=1)`` 
+                                        or ``[B, n, D] (groups=n)``
+                where the meaning of the symbols are:
+                - ``B``: batch size
+                - ``n``: number of replicas
+                - ``D``: input dimension 
+                When the shape of inputs is ``[B, D]``, all the n linear 
+                operations will take inputs as the same shared inputs.
+                When the shape of inputs is ``[B, n, D]``, each linear operator
+                will have its own input data by slicing inputs.
+
+        Returns:
+            torch.Tensor with shape ``[B, n, D]`` or ``[B, D]``
+                where the meaning of the symbols are:
+                - ``B``: batch
+                - ``n``: number of replicas
+                - ``D'``: output dimension
+        """
+
+        if inputs.ndim == 2:
+            # case 1: non-parallel inputs
+            assert inputs.shape[1] == self._input_size, (
+                "Input inputs has wrong shape %s. Expecting (B, %d)" %
+                (inputs.shape, self._input_size))
+            inputs = inputs.unsqueeze(0).expand(self._groups, *inputs.shape)
+        elif inputs.ndim == 3:
+            # case 2: parallel inputs
+            assert (
+                inputs.shape[1] == self._groups
+                and inputs.shape[2] == self._input_size), (
+                    "Input inputs has wrong shape %s. Expecting (B, %d, %d)" %
+                    (inputs.shape, self._groups, self._input_size))
+            inputs = inputs.transpose(0, 1)  # [n, B, D]
+        else:
+            raise ValueError("Wrong inputs.ndim=%d" % inputs.ndim)
+
+        if self._bias is not None:
+            res = torch.baddbmm(
+                self._bias.unsqueeze(1), inputs, self._weight.transpose(1, 2))
+        else:
+            res = torch.bmm(inputs, self._weight.transpose(1, 2))
+        res = res.transpose(0, 1)  # [B, n, D]
+        res = res.squeeze(1)  # [B, D] if n=1
+
+        return self._activation(res)
+
+
+@gin.configurable
+class ParamConv2D(nn.Module):
+    def __init__(self,
+                 in_channels,
+                 out_channels,
+                 kernel_size,
+                 activation=torch.relu_,
+                 strides=1,
+                 pooling_kernel=None,
+                 padding=0,
+                 use_bias=False,
+                 kernel_initializer=None,
+                 kernel_init_gain=1.0,
+                 bias_init_value=0.0):
+        """A 2D conv layer that does not maintain its own weight and bias,
+        but accepts both from users. If the given parameter (weight and bias) 
+        tensor has an extra batch dimension (first dimension), it performs
+        parallel FC operation. 
+
+        Args:
+            in_channels (int): channels of the input image
+            out_channels (int): channels of the output image
+            kernel_size (int or tuple):
+            activation (torch.nn.functional):
+            strides (int or tuple):
+            pooling_kernel (int or tuple):
+            padding (int or tuple):
+            use_bias (bool): whether use bias
+        """
+        super(ParamConv2D, self).__init__()
+
+        self._in_channels = in_channels
+        self._out_channels = out_channels
+        self._activation = activation
+        self._kernel_size = common.tuplify2d(kernel_size)
+        self._kH, self._kW = self._kernel_size
+        self._strides = strides
+        self._pooling_kernel = pooling_kernel
+        self._padding = padding
+        self._use_bias = use_bias
+        self._kernel_initializer = kernel_initializer
+        self._kernel_init_gain = kernel_init_gain
+        self._bias_init_value = bias_init_value
+
+        self._weight_length = out_channels * in_channels * self._kH * self._kW
+        self.set_weight(torch.randn(1, self._weight_length))
+        if use_bias:
+            self._bias_length = out_channels
+            self.set_bias(torch.randn(1, self._bias_length))
+        else:
+            self._bias_length = 0
+            self._bias = None
+
+    @property
+    def weight(self):
+        """Get stored weight tensor or batch of weight tensors."""
+        return self._weight
+
+    @property
+    def bias(self):
+        """Get stored bias tensor or batch of bias tensors."""
+        return self._bias
+
+    @property
+    def weight_length(self):
+        """Get the n_element of a single weight tensor. """
+        return self._weight_length
+
+    @property
+    def bias_length(self):
+        """Get the n_element of a single bias tensor. """
+        return self._bias_length
+
+    def set_weight(self, weight, reinitialize=False):
+        """Store a weight tensor or batch of weight tensors.
+
+        Args:
+            weight (torch.Tensor): with shape ``[B, D]``
+                where the mining of the symbols are:
+                - ``B``: batch size
+                - ``D``: length of weight vector, should be self._weight_length
+            reinitialize (bool): whether to reinitialize self._weight
+        """
+        assert (weight.ndim == 2 and weight.shape[1] == self._weight_length), (
+            "Input weight has wrong shape %s. Expecting shape (n, %d)" %
+            (weight.shape, self._weight_length))
+        if weight.shape[0] == 1:
+            # non-parallel weight
+            self._groups = 1
+            weight = weight.view(self._out_channels, self._in_channels,
+                                 self._kH, self._kW)
+        else:
+            # parallel weight
+            self._groups = weight.shape[0]
+            weight = weight.view(self._groups, self._out_channels,
+                                 self._in_channels, self._kH, self._kW)
+            weight = weight.reshape(self._groups * self._out_channels,
+                                    self._in_channels, self._kH, self._kW)
+
+        if reinitialize:
+            for i in range(self._groups):
+                if self._kernel_initializer is None:
+                    variance_scaling_init(
+                        weight[i * self._out_channels:(i + 1) *
+                               self._out_channels],
+                        gain=self._kernel_init_gain,
+                        nonlinearity=self._activation)
+                else:
+                    self._kernel_initializer(
+                        weight[i * self._out_channels:(i + 1) *
+                               self._out_channels])
+        self._weight = weight
+
+    def set_bias(self, bias, reinitialize=False):
+        """Store a bias tensor or batch of bias tensors.
+
+        Args:
+            bias (torch.Tensor): with shape ``[B, D]``
+                where the mining of the symbols are:
+                - ``B``: batch size
+                - ``D``: length of bias vector, should be self._bias_length
+            reinitialize (bool): whether to reinitialize self._bias
+        """
+        assert (bias.ndim == 2 and bias.shape[1] == self._bias_length), (
+            "Input bias has wrong shape %s. Expecting shape (n, %d)" %
+            (bias.shape, self._bias_length))
+        assert bias.shape[0] == self._groups, (
+            "Input bias has wrong shape %s. Expecting shape (%d, %d)" %
+            (bias.shape, self._group, self.bias_length))
+
+        if reinitialize:
+            if self._use_bias:
+                nn.init.constant_(bias, self._bias_init_value)
+
+        self._bias = bias.reshape(-1)
+
+    def forward(self, img, keep_group_dim=True):
+        """Forward
+
+        Args:
+            img (torch.Tensor): with shape ``[B, C, H, W] (groups=1)`` 
+                                        or ``[B, n, C, H, W] (groups=n)``
+                where the meaning of the symbols are:
+                - ``B``: batch size
+                - ``n``: number of replicas
+                - ``C``: number of channels
+                - ``H``: image height
+                - ``W``: image width.
+                When the shape of img is ``[B, C, H, W]``, all the n 2D Conv
+                operations will take img as the same shared input.
+                When the shape of img is ``[B, n, C, H, W]``, each 2D Conv operator
+                will have its own input data by slicing img.
+
+        Returns:
+            torch.Tensor with shape ``[B, n, C', H', W']``
+                where the meaning of the symbols are:
+                - ``B``: batch
+                - ``n``: number of replicas
+                - ``C'``: number of output channels
+                - ``H'``: output height
+                - ``W'``: output width
+        """
+        if self._groups == 1:
+            # non-parallel layer
+            assert (img.ndim == 4 and img.shape[1] == self._in_channels), (
+                "Input img has wrong shape %s. Expecting (B, %d, H, W)" %
+                (img.shape, self._in_channels))
+        else:
+            # parallel layer
+            if img.ndim == 4:
+                if img.shape[1] == self._in_channels:
+                    # case 1: non-parallel input
+                    img = img.repeat(1, self._groups, 1, 1)
+                else:
+                    # case 2: parallel input
+                    assert img.shape[1] == self._groups * self._in_channels, (
+                        "Input img has wrong shape %s. Expecting (B, %d, H, W) or (B, %d, H, W)"
+                        % (img.shape, self._in_channels,
+                           self._groups * self._in_channels))
+            elif img.ndim == 5:
+                # case 3: parallel input with unmerged group dim
+                assert (
+                    img.shape[1] == self._groups
+                    and img.shape[2] == self._in_channels
+                ), ("Input img has wrong shape %s. Expecting (B, %d, %d, H, W)"
+                    % (img.shape, self._groups, self._in_channels))
+                # merge group and channel dim
+                img = img.reshape(img.shape[0], img.shape[1] * img.shape[2],
+                                  *img.shape[3:])
+            else:
+                raise ValueError("Wrong img.ndim=%d" % img.ndim)
+
+        res = self._activation(
+            F.conv2d(
+                img,
+                self._weight,
+                bias=self._bias,
+                stride=self._strides,
+                padding=self._padding,
+                groups=self._groups))
+        if self._pooling_kernel is not None:
+            res = F.max_pool2d(res, self._pooling_kernel)
+
+        if self._groups > 1 and keep_group_dim:
+            # reshape back: [B, n*C', H', W'] -> [B, n, C', H', W']
+            res = res.reshape(res.shape[0], self._groups, self._out_channels,
+                              res.shape[2], res.shape[3])
+
+        return res
+
+
+@gin.configurable
 class Reshape(nn.Module):
     def __init__(self, shape):
         """A layer for reshape the tensor.
@@ -850,7 +1567,8 @@ def _conv_transpose_2d(in_channels,
                        out_channels,
                        kernel_size,
                        stride=1,
-                       padding=0):
+                       padding=0,
+                       bias=True):
     # need output_padding so that output_size is stride * input_size
     # See https://pytorch.org/docs/stable/nn.html#torch.nn.ConvTranspose2d
     output_padding = stride + 2 * padding - kernel_size
@@ -860,10 +1578,12 @@ def _conv_transpose_2d(in_channels,
         kernel_size,
         stride=stride,
         padding=padding,
-        output_padding=output_padding)
+        output_padding=output_padding,
+        bias=bias)
 
 
-@gin.configurable(whitelist=['v1_5', 'with_batch_normalization'])
+@gin.configurable(
+    whitelist=['v1_5', 'with_batch_normalization', 'keep_conv_bias'])
 class BottleneckBlock(nn.Module):
     """Bottleneck block for ResNet.
 
@@ -883,7 +1603,8 @@ class BottleneckBlock(nn.Module):
                  stride,
                  transpose=False,
                  v1_5=True,
-                 with_batch_normalization=True):
+                 with_batch_normalization=True,
+                 keep_conv_bias=False):
         """
         Args:
             kernel_size (int): the kernel size of middle layer at main path
@@ -897,6 +1618,10 @@ class BottleneckBlock(nn.Module):
             v1_5 (bool): whether to use the ResNet V1.5 structure
             with_batch_normalization (bool): whether to include batch normalization.
                 Note that standard ResNet uses batch normalization.
+            keep_conv_bias (bool): by default, if ``with_batch_normalization`` is
+                True, the biases of conv layers are not used because they are useless.
+                This behavior can be overrided by setting ``keep_conv_bias`` to
+                True. The main purpose of this is for loading legacy models.
         Return:
             Output tensor for the block
         """
@@ -905,26 +1630,39 @@ class BottleneckBlock(nn.Module):
 
         conv_fn = _conv_transpose_2d if transpose else nn.Conv2d
 
+        bias = not with_batch_normalization or keep_conv_bias
+
         padding = (kernel_size - 1) // 2
         if v1_5:
-            a = conv_fn(in_channels, filters1, 1)
-            b = conv_fn(filters1, filters2, kernel_size, stride, padding)
+            a = conv_fn(in_channels, filters1, 1, bias=bias)
+            b = conv_fn(
+                filters1, filters2, kernel_size, stride, padding, bias=bias)
         else:
-            a = conv_fn(in_channels, filters1, 1, stride)
-            b = conv_fn(filters1, filters2, kernel_size, 1, padding)
+            a = conv_fn(in_channels, filters1, 1, stride, bias=bias)
+            b = conv_fn(filters1, filters2, kernel_size, 1, padding, bias=bias)
+
+        c = conv_fn(filters2, filters3, 1, bias=bias)
 
         nn.init.kaiming_normal_(a.weight.data)
-        nn.init.zeros_(a.bias.data)
         nn.init.kaiming_normal_(b.weight.data)
-        nn.init.zeros_(b.bias.data)
-
-        c = conv_fn(filters2, filters3, 1)
         nn.init.kaiming_normal_(c.weight.data)
-        nn.init.zeros_(c.bias.data)
 
-        s = conv_fn(in_channels, filters3, 1, stride)
-        nn.init.kaiming_normal_(s.weight.data)
-        nn.init.zeros_(s.bias.data)
+        if bias:
+            nn.init.zeros_(a.bias.data)
+            nn.init.zeros_(b.bias.data)
+            nn.init.zeros_(c.bias.data)
+
+        if stride != 1 or in_channels != filters3:
+            s = conv_fn(in_channels, filters3, 1, stride, bias=bias)
+            nn.init.kaiming_normal_(s.weight.data)
+            if bias:
+                nn.init.zeros_(s.bias.data)
+            if with_batch_normalization:
+                shortcut_layers = nn.Sequential(s, nn.BatchNorm2d(filters3))
+            else:
+                shortcut_layers = s
+        else:
+            shortcut_layers = None
 
         relu = nn.ReLU(inplace=True)
 
@@ -932,17 +1670,18 @@ class BottleneckBlock(nn.Module):
             core_layers = nn.Sequential(a, nn.BatchNorm2d(filters1), relu, b,
                                         nn.BatchNorm2d(filters2), relu, c,
                                         nn.BatchNorm2d(filters3))
-            shortcut_layers = nn.Sequential(s, nn.BatchNorm2d(filters3))
         else:
             core_layers = nn.Sequential(a, relu, b, relu, c)
-            shortcut_layers = s
 
         self._core_layers = core_layers
         self._shortcut_layers = shortcut_layers
 
     def forward(self, inputs):
         core = self._core_layers(inputs)
-        shortcut = self._shortcut_layers(inputs)
+        if self._shortcut_layers:
+            shortcut = self._shortcut_layers(inputs)
+        else:
+            shortcut = inputs
 
         return torch.relu_(core + shortcut)
 
@@ -950,3 +1689,311 @@ class BottleneckBlock(nn.Module):
         x = torch.zeros(1, *input_shape)
         y = self.forward(x)
         return y.shape[1:]
+
+
+def _masked_softmax(logits, mask, dim=-1):
+    if mask is not None:
+        logits.masked_fill_(mask, -float('inf'))
+    return nn.functional.softmax(logits, dim=dim)
+
+
+class TransformerBlock(nn.Module):
+    """Transformer residue block.
+
+    The transformer residue block includes two residue blocks with layer normalization (LN):
+
+    1. Multi-head attention (MHA) block
+    2. Position-wise MLP
+
+    The overall computation is:
+
+    .. code-block:: python
+
+        y = x + MHA(LN(x))
+        z = y + MLP(LN(y))
+
+    The original transformer is described in:
+    [1]. Ashish Vaswani et. al. Attention Is All You Need
+
+    This implementation is a variation which places layer norm at a different
+    location, which is proposed in:
+    [2]. Ruibin XiongOn et. al. Layer Normalization in the Transformer Architecture
+
+    We also support the relative positional encoding proposed in
+    [3] Zihang Dai et. al. Transformer-XL: Attentive language models beyond a fixed-length context.
+
+    In this implementation, the positional encodings are learnable parameter instead
+    of the sinusoidal matrix proposed in [1]
+    """
+
+    def __init__(self,
+                 d_model,
+                 num_heads,
+                 memory_size,
+                 d_k=None,
+                 d_v=None,
+                 d_ff=None,
+                 positional_encoding='abs',
+                 add_positional_encoding=True,
+                 scale_attention_score=True):
+        """
+        Args:
+            d_model (int): dimension of the model, same as d_model in [1]
+            num_heads (int): the number of attention heads
+            memory_size (int): maximal allowed sequence length
+            d_k (int): Dimension of key, same as d_k in [1]. If None, use ``d_model // num_heads``
+            d_v (int): Dimension of value, same as d_v in [1]. If None, use ``d_model // num_heads``
+            d_ff (int): Diemension of the MLP, same as d_ff in [1]. If None, use ``4 * d_model``
+            positional_encoding (str): One of ['none', 'abs', 'rel']. If 'none',
+                no position encoding will be used. If 'abs', use absolute positional
+                encoding depending on the absolute position in the memory sequence,
+                same as that described in [1]. If 'rel', use the relative positional
+                encoding proposed in [3].
+            add_positional_encoding (bool): If True, in addition to use positional
+                encoding for calculating the attention weights, the positional encoding
+                is also concatenated to the attention result so that the attention
+                result can keep the location information better. Note that using
+                this option will increase the number of parameters by about 25%.
+                This option cannot be used if positional_encoding is 'none'.
+            scale_attention_score (bool): If True, scale the attention score by
+                ``d_k ** -0.5`` as suggested in [1]. However, this may not always
+                be better since it slows the unittest in layers_test.py
+        """
+        super().__init__()
+        if d_k is None:
+            d_k = d_model // num_heads
+        if d_v is None:
+            d_v = d_model // num_heads
+        if d_ff is None:
+            d_ff = 4 * d_model
+        self._q_proj = nn.Parameter(torch.Tensor(d_model, num_heads * d_k))
+        self._k_proj = nn.Parameter(torch.Tensor(d_model, num_heads * d_k))
+        self._v_proj = nn.Parameter(torch.Tensor(d_model, num_heads * d_v))
+        d_a = d_v
+        if add_positional_encoding:
+            assert positional_encoding != 'none', (
+                "positional_encoding cannot be 'none' for "
+                "add_positional_encoding=True")
+            d_a = d_v + d_k
+        self._o_proj = nn.Parameter(torch.Tensor(num_heads * d_a, d_model))
+
+        self._d_model = d_model
+        self._d_k = d_k
+        self._d_v = d_v
+        self._d_a = d_a
+        self._num_heads = num_heads
+        self._memory_size = memory_size
+        self._relative_positional_encoding = positional_encoding == 'rel'
+        self._add_positional_encoding = add_positional_encoding
+
+        self._attention_scale = d_k**-0.5 if scale_attention_score else 1.
+        self._mlp = torch.nn.Sequential(
+            FC(d_model, d_ff, torch.relu_), FC(d_ff, d_model))
+        self._norm1 = torch.nn.LayerNorm(d_model)
+        self._norm2 = torch.nn.LayerNorm(d_model)
+
+        l = 2 * memory_size - 1 if positional_encoding == 'rel' else memory_size
+        self._positional_encoding = None
+        if positional_encoding != 'none':
+            self._positional_encoding = nn.Parameter(torch.Tensor(l, d_k))
+        # bias over query vectors when calculating score with keys. Introduced in [3].
+        self._qk_bias = nn.Parameter(torch.Tensor(num_heads, d_k))
+        # bias over query vectors when calculating score with positional encodings.
+        # Introduced in [3].
+        self._qp_bias = nn.Parameter(torch.Tensor(num_heads, d_k))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        """Initialize the parameters."""
+        nn.init.xavier_uniform_(self._q_proj)
+        nn.init.xavier_uniform_(self._k_proj)
+        nn.init.xavier_uniform_(self._v_proj)
+        nn.init.xavier_uniform_(self._o_proj)
+        nn.init.zeros_(self._qk_bias)
+        nn.init.zeros_(self._qp_bias)
+        if self._positional_encoding is not None:
+            nn.init.uniform_(self._positional_encoding, -0.1, 0.1)
+        for l in self._mlp:
+            l.reset_parameters()
+
+    @staticmethod
+    def _shift(x, m):
+        """
+        y[i, j, :] <= x[n - 1 + i - j, :] for 0<=i<m, 0<=j<n
+        Args:
+            x: [2 * N - 1, d]
+        Returns:
+            [M, N, d]
+        """
+        n = (x.shape[0] + 1) // 2
+        # [M, N], index[i, j] = n - 1 + i - j
+        index = n - 1 + torch.arange(m).unsqueeze(-1) - torch.arange(n)
+        return x[index]
+
+    def forward(self, memory, query=None, mask=None):
+        """Forward computation.
+
+        Notation: B: batch_size, N: length of ``memory``, M: length of ``query``
+        Args:
+            memory (Tensor): The shape is [B, N, d_model]
+            query (Tensor): The shape [B, d_model] or [B, M, d_model]. If None,
+                will use memory as query
+            mask (Tensor|None): A tensor for indicating which slot in ``memory``
+                will be used. Its shape can be [B, N] or [B, M, N]. If the shape
+                is [B, N], mask[b,n] indicates whether to use memory[b, n] for
+                calculating the attention result for ``query[b]``. If the shape is
+                [B, M, N], maks[b, m, n] indicates whether to use meory[b, n] for
+                calculating the attention result for ``query[b, m]``.
+        Returns:
+            Tensor: the shape is same as query.
+        """
+        need_squeeze = False
+        if query is None:
+            original_query = memory
+            memory = self._norm1(memory)
+            query = memory
+        else:
+            if query.ndim == 2:
+                query = query.unsqueeze(1)
+                need_squeeze = True
+            original_query = query
+            query = self._norm1(query)
+            memory = self._norm1(memory)
+
+        if mask is not None:
+            if mask.ndim == 2:
+                mask = mask.unsqueeze(1)
+            # [B, M, 1, N]
+            mask = mask.unsqueeze(2)
+
+        # B: batch_size
+        # H: num_heads
+        # N: memory_size
+        # M: query.shape[1]
+        # L: 2N-1 if relative_positional_encoding else N
+        batch_size = query.shape[0]
+        m = query.shape[1]
+        n = memory.shape[1]
+        d_k = self._d_k
+        d_v = self._d_v
+        d_model = self._d_model
+        d_a = self._d_a
+        num_heads = self._num_heads
+
+        assert query.shape[0] == memory.shape[0]
+        assert query.shape[2] == d_model
+        assert memory.shape[2] == d_model
+        assert n <= self._memory_size
+        assert m <= self._memory_size
+
+        # [B, M, H, d_k] <= [B, M, d_model] * [d_model, d_k]
+        q = torch.matmul(query, self._q_proj).reshape(batch_size, m, num_heads,
+                                                      d_k)
+
+        # We select different versions of calculation based on memory consumption
+        if n * d_k <= m * d_model:
+            #             computation                  memory
+            # k           N * H * d_k * d_model        N * H * d_k
+            # a           M * H * N * d_k              M * H * N
+
+            # [B, N, H, d_k] <= [B, N, d_model] * [d_model, H * d_k]
+            k = torch.matmul(memory, self._k_proj).reshape(
+                batch_size, n, num_heads, d_k)
+            # [B, M, H, N] <= [B, M, H, d_k] * [B, N, H, d_k]
+            logits = torch.einsum('bmhd,bnhd->bmhn', q + self._qk_bias, k)
+        else:
+            #             computation                  memory
+            # qk          M * H * d_k * d_model        M * H * d_model
+            # a           M * H * N * d_model          M * H * N
+
+            # [B, M, H, d_model] <= [B, M, H, d_k] * [d_model, H, d_k]
+            qk = torch.einsum('bmhd,ehd->bmhe', q + self._qk_bias,
+                              self._k_proj.reshape(d_model, num_heads, d_k))
+            # [B, M, H, N] <= [B, M, H, d_model] * [B, N, d_model]
+            logits = torch.einsum('bmhd,bnd->bmhn', qk, memory)
+
+        if self._positional_encoding is not None:
+            # [N, d_k]
+            positional_encoding = self._positional_encoding
+            if n < self._memory_size:
+                d = self._memory_size - n
+                if self._relative_positional_encoding:
+                    positional_encoding = positional_encoding[d:-d]
+                else:
+                    positional_encoding = positional_encoding[:-d]
+
+            if self._relative_positional_encoding:
+                # positional_encoding[i, j, :] <= positional_encoding(n - 1 + i - j, d)
+                # [M, N, d_k]
+                positional_encoding = self._shift(positional_encoding, m)
+            # [B, M, H, N] <= [B, M, H, d_k] * ([d_k, N] or [M, d_k, N])
+            positional_logits = torch.matmul(
+                q + self._qp_bias, positional_encoding.transpose(-2, -1))
+            # gradient can still be correctly calculated in this case even though
+            # inplace add is used.
+            logits.add_(positional_logits)
+
+        if self._attention_scale != 1.0:
+            logits.mul_(self._attention_scale)
+
+        # [B, M, H, N]
+        a = _masked_softmax(logits, mask)
+
+        if n * d_v <= m * d_model:
+            #             computation                  memory
+            # v           N * H * d_v * d_model        N * H * d_v
+            # att_result  M * H * N * d_v              M * H * d_v
+
+            # [B, N, H, d_v] <= [B, N, d_model] * [d_model, H * d_v]
+            v = torch.matmul(memory, self._v_proj).reshape(
+                batch_size, n, num_heads, d_v)
+            # [B, M, H, d_v] <= [B, M, H, N] * [B, N, H, d_v]
+            att_result = torch.einsum('bmhn,bnhd->bmhd', a, v)
+        else:
+            # computation                  memory
+            # att_result  M * H * N * d_model          M * H * d_model
+            # att_result  M * H * d_v * d_model        M * H * d_v
+
+            # [B, M, H, d_model] <= [B, M, H, N] * [B, 1, N, d_model]
+            att_result = torch.einsum('bmhn,bnd->bmhd', a, memory)
+            # [B, M, H, d_v] <= [B, M, H, d_model] * [d_model, H, d_v]
+            att_result = torch.einsum(
+                'bmhd,dhe->bmhe', att_result,
+                self._v_proj.reshape(d_model, self._num_heads, d_v))
+
+        if self._add_positional_encoding:
+            # [B, M, H, d_k] <= [B, M, H, N] * ([N, d_k] or [M, N, d_k])
+            att_pos = torch.matmul(a, positional_encoding)
+            # [B, M, H, d_v + d_k]
+            att_result = torch.cat([att_result, att_pos], dim=-1)
+
+        # [B, M, H * d_a]
+        att_result = att_result.reshape(batch_size, m, num_heads * d_a)
+        # [B, M, d_model]
+        x = original_query + torch.matmul(att_result, self._o_proj)
+        # [B, M, d_model]
+        y = self._mlp(self._norm2(x))
+        # [B, M, d_model]
+        z = x + y
+
+        if need_squeeze:
+            z = z.squeeze(1)
+
+        return z
+
+
+class Lambda(nn.Module):
+    def __init__(self, func):
+        """
+        Args:
+            func (Callable): a function that calculate the output given the input.
+                It should be parameterless.
+        """
+        super().__init__()
+        self._func = func
+
+    def forward(self, x):
+        return self._func(x)
+
+    def reset_parameters(self):
+        return

@@ -61,14 +61,16 @@ class OffPolicyAlgorithm(RLAlgorithm):
         config: TrainerConfig = self._config
 
         if not config.update_counter_every_mini_batch:
-            alf.summary.get_global_counter().add_(1)
+            alf.summary.increment_global_counter()
 
         with torch.set_grad_enabled(config.unroll_with_grad):
             with record_time("time/unroll"):
+                self.eval()
                 experience = self.unroll(config.unroll_length)
                 self.summarize_rollout(experience)
                 self.summarize_metrics()
 
+        self.train()
         steps = self.train_from_replay_buffer(update_global_counter=True)
 
         with record_time("time/after_train_iter"):

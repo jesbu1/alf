@@ -16,13 +16,15 @@
 import torch
 
 from absl.testing import parameterized
+import collections
 
 import alf
 import alf.nest as nest
 import cnest
 from alf.data_structures import namedtuple
 from alf.tensor_specs import TensorSpec
-from alf.nest.utils import NestConcat, NestSum, NestMultiply, transform_nest
+from alf.nest.utils import NestConcat, NestSum, NestMultiply
+from alf.nest import transform_nest
 
 NTuple = namedtuple('NTuple', ['a', 'b'])  # default value will be None
 
@@ -242,6 +244,42 @@ class TestNestConcat(alf.test.TestCase):
         self.assertEqual(ret, TensorSpec((2, 17)))
 
 
+class TestNestSelectiveConcat(parameterized.TestCase, alf.test.TestCase):
+    @parameterized.parameters(
+        (NTuple(a=dict(x=1, y=0), b=0), torch.zeros((2, 3))),
+        (NTuple(a=dict(x=0, y=1), b=0), torch.zeros((2, 4))),
+        (NTuple(a=dict(x=0, y=0), b=1), torch.zeros((2, 10))),
+        (NTuple(a=dict(x=1, y=1), b=0), torch.zeros((2, 7))),
+        (NTuple(a=dict(x=1, y=0), b=1), torch.zeros((2, 13))),
+        (NTuple(a=dict(x=0, y=1), b=1), torch.zeros((2, 14))),
+        (NTuple(a=dict(x=1, y=1), b=1), torch.zeros((2, 17))),
+        (None, torch.zeros((2, 17))),
+    )
+    def test_nest_selective_concat_tensors(self, mask, expected):
+        ntuple = NTuple(
+            a=dict(x=torch.zeros((2, 3)), y=torch.zeros((2, 4))),
+            b=torch.zeros((2, 10)))
+        ret = NestConcat(mask)(ntuple)
+        self.assertTensorEqual(ret, expected)
+
+    @parameterized.parameters(
+        (NTuple(a=dict(x=1, y=0), b=0), TensorSpec((2, 3))),
+        (NTuple(a=dict(x=0, y=1), b=0), TensorSpec((2, 4))),
+        (NTuple(a=dict(x=0, y=0), b=1), TensorSpec((2, 10))),
+        (NTuple(a=dict(x=1, y=1), b=0), TensorSpec((2, 7))),
+        (NTuple(a=dict(x=1, y=0), b=1), TensorSpec((2, 13))),
+        (NTuple(a=dict(x=0, y=1), b=1), TensorSpec((2, 14))),
+        (NTuple(a=dict(x=1, y=1), b=1), TensorSpec((2, 17))),
+        (None, TensorSpec((2, 17))),
+    )
+    def test_nest_selective_concat_specs(self, mask, expected):
+        ntuple = NTuple(
+            a=dict(x=TensorSpec((2, 3)), y=TensorSpec((2, 4))),
+            b=TensorSpec((2, 10)))
+        ret = NestConcat(mask)(ntuple)
+        self.assertEqual(ret, expected)
+
+
 class TestNestSum(alf.test.TestCase):
     def test_nest_sum_tensors(self):
         ntuple = NTuple(
@@ -326,6 +364,15 @@ class TestTransformNest(alf.test.TestCase):
         ntuple = NTuple(a=1, b=2)
         transformed_ntuple = transform_nest(ntuple, None, NestSum())
         self.assertEqual(transformed_ntuple, 3)
+
+        tuples = [("a", 12), ("b", 13)]
+        nested = collections.OrderedDict(tuples)
+
+        def _check_path(path, e):
+            self.assertEqual(nested[path], e)
+
+        res = nest.py_map_structure_with_path(_check_path, nested)
+        nest.assert_same_structure(nested, res)
 
 
 class TestExtractAnyLeaf(alf.test.TestCase):

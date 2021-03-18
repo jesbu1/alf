@@ -25,17 +25,21 @@ from alf.algorithms.agent_helpers import AgentHelper
 from alf.algorithms.config import TrainerConfig
 from alf.algorithms.entropy_target_algorithm import EntropyTargetAlgorithm
 from alf.algorithms.icm_algorithm import ICMAlgorithm
+from alf.algorithms.mbrl_algorithm import LatentMbrlAlgorithm
 from alf.algorithms.on_policy_algorithm import OnPolicyAlgorithm
+from alf.algorithms.predictive_representation_learner import \
+                            PredictiveRepresentationLearner
 from alf.algorithms.rl_algorithm import RLAlgorithm
 from alf.data_structures import AlgStep, Experience
 from alf.data_structures import TimeStep, namedtuple
 from alf.utils import math_ops
 
 AgentState = namedtuple(
-    "AgentState", ["rl", "irm", "goal_generator"], default_value=())
+    "AgentState", ["obs_trans", "rl", "irm", "goal_generator", "repr"],
+    default_value=())
 
 AgentInfo = namedtuple(
-    "AgentInfo", ["rl", "irm", "goal_generator", "entropy_target"],
+    "AgentInfo", ["rl", "irm", "goal_generator", "entropy_target", "repr"],
     default_value=())
 
 
@@ -49,16 +53,15 @@ class Agent(OnPolicyAlgorithm):
                  action_spec,
                  env=None,
                  config: TrainerConfig = None,
-                 goal_generator=None,
                  rl_algorithm_cls=ActorCriticAlgorithm,
+                 representation_learner_cls=None,
+                 goal_generator=None,
                  intrinsic_reward_module=None,
                  intrinsic_reward_coef=1.0,
                  extrinsic_reward_coef=1.0,
                  enforce_entropy_target=False,
                  entropy_target_cls=None,
                  optimizer=None,
-                 reward_shaping_fn: Callable = None,
-                 observation_transformer=math_ops.identity,
                  debug_summaries=False,
                  name="AgentAlgorithm"):
         """
@@ -75,6 +78,10 @@ class Agent(OnPolicyAlgorithm):
                 provided to the algorithm which performs ``train_iter()`` by
                 itself.
             rl_algorithm_cls (type): The algorithm class for learning the policy.
+            representation_learner_cls (type): The algorithm class for learning
+                the representation. If provided, the constructed learner will
+                calculate the representation from the original observation as
+                the observation for downstream algorithms such as ``rl_algorithm``.
             intrinsic_reward_module (Algorithm): an algorithm whose outputs
                 is a scalar intrinsic reward.
             goal_generator (Algorithm): an algorithm with output a goal vector
@@ -91,21 +98,28 @@ class Agent(OnPolicyAlgorithm):
             entropy_target_cls (type): If provided, will be used to dynamically
                 adjust entropy regularization.
             optimizer (tf.optimizers.Optimizer): The optimizer for training
-            reward_shaping_fn (Callable): a function that transforms extrinsic
-                immediate rewards
-            observation_transformer (Callable | list[Callable]): transformation(s)
-                applied to ``time_step.observation``.
             debug_summaries (bool): True if debug summaries should be created.
             name (str): Name of this algorithm.
             """
         agent_helper = AgentHelper(AgentState)
 
-        ## 1. goal generator
         rl_observation_spec = observation_spec
+
+        ## 0. representation learner
+        representation_learner = None
+        if representation_learner_cls is not None:
+            representation_learner = representation_learner_cls(
+                observation_spec=rl_observation_spec,
+                action_spec=action_spec,
+                debug_summaries=debug_summaries)
+            rl_observation_spec = representation_learner.output_spec
+            agent_helper.register_algorithm(representation_learner, "repr")
+
+        ## 1. goal generator
         if goal_generator is not None:
             agent_helper.register_algorithm(goal_generator, "goal_generator")
             rl_observation_spec = [
-                observation_spec, goal_generator.action_spec
+                rl_observation_spec, goal_generator.action_spec
             ]
 
         ## 2. rl algorithm
@@ -116,6 +130,14 @@ class Agent(OnPolicyAlgorithm):
         agent_helper.register_algorithm(rl_algorithm, "rl")
         # Whether the agent is on-policy or not depends on its rl algorithm.
         self._is_on_policy = rl_algorithm.is_on_policy()
+
+        if isinstance(rl_algorithm, LatentMbrlAlgorithm):
+            assert isinstance(representation_learner,
+                              PredictiveRepresentationLearner), (
+                                  "need to use "
+                                  "PredictiveRepresentationLearner")
+            rl_algorithm.set_latent_predictive_representation_module(
+                representation_learner)
 
         ## 3. intrinsic motivation module
         if intrinsic_reward_module is not None:
@@ -137,12 +159,11 @@ class Agent(OnPolicyAlgorithm):
             optimizer=optimizer,
             env=env,
             config=config,
-            reward_shaping_fn=reward_shaping_fn,
-            observation_transformer=observation_transformer,
             debug_summaries=debug_summaries,
             name=name,
             **agent_helper.state_specs())
 
+        self._representation_learner = representation_learner
         self._rl_algorithm = rl_algorithm
         self._entropy_target_algorithm = entropy_target_algorithm
         self._intrinsic_reward_coef = intrinsic_reward_coef
@@ -150,6 +171,10 @@ class Agent(OnPolicyAlgorithm):
         self._irm = intrinsic_reward_module
         self._goal_generator = goal_generator
         self._agent_helper = agent_helper
+        # Set ``use_rollout_state``` for all submodules using the setter.
+        # Need to make sure that no submodules use ``self._use_rollout_state``
+        # before this line.
+        self.use_rollout_state = self.use_rollout_state
 
     def is_on_policy(self):
         return self._is_on_policy
@@ -159,18 +184,30 @@ class Agent(OnPolicyAlgorithm):
         """Predict for one step."""
         new_state = AgentState()
         observation = time_step.observation
+        info = AgentInfo()
+
+        if self._representation_learner is not None:
+            repr_step = self._representation_learner.predict_step(
+                time_step, state.repr)
+            new_state = new_state._replace(repr=repr_step.state)
+            info = info._replace(repr=repr_step.info)
+            observation = repr_step.output
+
         if self._goal_generator is not None:
             goal_step = self._goal_generator.predict_step(
-                time_step, state.goal_generator, epsilon_greedy)
+                time_step._replace(observation=observation),
+                state.goal_generator, epsilon_greedy)
             new_state = new_state._replace(goal_generator=goal_step.state)
+            info = info._replace(goal_generator=goal_step.info)
             observation = [observation, goal_step.output]
 
         rl_step = self._rl_algorithm.predict_step(
             time_step._replace(observation=observation), state.rl,
             epsilon_greedy)
         new_state = new_state._replace(rl=rl_step.state)
+        info = info._replace(rl=rl_step.info)
 
-        return AlgStep(output=rl_step.output, state=new_state, info=())
+        return AlgStep(output=rl_step.output, state=new_state, info=info)
 
     def rollout_step(self, time_step: TimeStep, state: AgentState):
         """Rollout for one step."""
@@ -178,9 +215,17 @@ class Agent(OnPolicyAlgorithm):
         info = AgentInfo()
         observation = time_step.observation
 
+        if self._representation_learner is not None:
+            repr_step = self._representation_learner.rollout_step(
+                time_step, state.repr)
+            new_state = new_state._replace(repr=repr_step.state)
+            info = info._replace(repr=repr_step.info)
+            observation = repr_step.output
+
         if self._goal_generator is not None:
             goal_step = self._goal_generator.rollout_step(
-                time_step, state.goal_generator)
+                time_step._replace(observation=observation),
+                state.goal_generator)
             new_state = new_state._replace(goal_generator=goal_step.state)
             info = info._replace(goal_generator=goal_step.info)
             observation = [observation, goal_step.output]
@@ -214,9 +259,18 @@ class Agent(OnPolicyAlgorithm):
         info = AgentInfo()
         observation = exp.observation
 
+        if self._representation_learner is not None:
+            repr_step = self._representation_learner.train_step(
+                exp._replace(rollout_info=exp.rollout_info.repr), state.repr)
+            new_state = new_state._replace(repr=repr_step.state)
+            info = info._replace(repr=repr_step.info)
+            observation = repr_step.output
+
         if self._goal_generator is not None:
             goal_step = self._goal_generator.train_step(
-                exp._replace(rollout_info=exp.rollout_info.goal_generator),
+                exp._replace(
+                    observation=observation,
+                    rollout_info=exp.rollout_info.goal_generator),
                 state.goal_generator)
             info = info._replace(goal_generator=goal_step.info)
             new_state = new_state._replace(goal_generator=goal_step.state)
@@ -276,13 +330,11 @@ class Agent(OnPolicyAlgorithm):
             experience = experience._replace(
                 reward=self.calc_training_reward(experience.reward,
                                                  train_info))
-        algorithms = [self._rl_algorithm]
-        if self._irm:
-            algorithms.append(self._irm)
-        if self._goal_generator:
-            algorithms.append(self._goal_generator)
-        if self._entropy_target_algorithm:
-            algorithms.append(self._entropy_target_algorithm)
+        algorithms = [
+            self._representation_learner, self._rl_algorithm, self._irm,
+            self._goal_generator, self._entropy_target_algorithm
+        ]
+        algorithms = list(filter(lambda a: a is not None, algorithms))
         return self._agent_helper.accumulate_loss_info(algorithms, experience,
                                                        train_info)
 
@@ -290,18 +342,22 @@ class Agent(OnPolicyAlgorithm):
         """Call ``after_update()`` of the RL algorithm and goal generator,
         respectively.
         """
-        algorithms = [self._rl_algorithm]
-        if self._goal_generator:
-            algorithms.append(self._goal_generator)
+        algorithms = [
+            self._rl_algorithm, self._representation_learner,
+            self._goal_generator
+        ]
+        algorithms = list(filter(lambda a: a is not None, algorithms))
         self._agent_helper.after_update(algorithms, experience, train_info)
 
     def after_train_iter(self, experience, train_info: AgentInfo = None):
         """Call ``after_train_iter()`` of the RL algorithm and goal generator,
         respectively.
         """
-        algorithms = [self._rl_algorithm]
-        if self._goal_generator:
-            algorithms.append(self._goal_generator)
+        algorithms = [
+            self._rl_algorithm, self._representation_learner,
+            self._goal_generator
+        ]
+        algorithms = list(filter(lambda a: a is not None, algorithms))
         self._agent_helper.after_train_iter(algorithms, experience, train_info)
 
     def preprocess_experience(self, exp: Experience):
@@ -310,7 +366,32 @@ class Agent(OnPolicyAlgorithm):
         algorithm.
         """
         reward = self.calc_training_reward(exp.reward, exp.rollout_info)
+        exp = exp._replace(reward=reward)
+
+        if self._representation_learner:
+            new_exp = self._representation_learner.preprocess_experience(
+                exp._replace(
+                    rollout_info=exp.rollout_info.repr,
+                    rollout_info_field=exp.rollout_info_field + '.repr'))
+            exp = new_exp._replace(
+                rollout_info=exp.rollout_info._replace(
+                    repr=new_exp.rollout_info))
+
         new_exp = self._rl_algorithm.preprocess_experience(
-            exp._replace(reward=reward, rollout_info=exp.rollout_info.rl))
+            exp._replace(
+                rollout_info=exp.rollout_info.rl,
+                rollout_info_field=exp.rollout_info_field + '.rl'))
         return new_exp._replace(
-            rollout_info=exp.rollout_info._replace(rl=new_exp.rollout_info))
+            rollout_info=exp.rollout_info._replace(rl=new_exp.rollout_info),
+            rollout_info_field=exp.rollout_info_field)
+
+    def summarize_rollout(self, experience):
+        """First call ``RLAlgorithm.summarize_rollout()`` to summarize basic
+        rollout statisics. If the rl algorithm has overridden this function,
+        then also call its customized version.
+        """
+        super(Agent, self).summarize_rollout(experience)
+        if (super(Agent, self).summarize_rollout.__func__ !=
+                self._rl_algorithm.summarize_rollout.__func__):
+            self._rl_algorithm.summarize_rollout(
+                experience._replace(rollout_info=experience.rollout_info.rl))

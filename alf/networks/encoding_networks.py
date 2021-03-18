@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -499,21 +499,33 @@ class EncodingNetwork(PreprocessorNetwork):
 
     def __init__(self,
                  input_tensor_spec,
+                 output_tensor_spec=None,
                  input_preprocessors=None,
                  preprocessing_combiner=None,
                  conv_layer_params=None,
                  fc_layer_params=None,
                  activation=torch.relu_,
                  kernel_initializer=None,
+                 use_fc_bn=False,
                  last_layer_size=None,
                  last_activation=None,
                  last_kernel_initializer=None,
+                 last_use_fc_bn=False,
                  name="EncodingNetwork"):
         """
         Args:
             input_tensor_spec (nested TensorSpec): the (nested) tensor spec of
                 the input. If nested, then ``preprocessing_combiner`` must not be
                 None.
+            output_tensor_spec (None|TensorSpec): spec for the output. If None,
+                the output tensor spec will be assumed as
+                ``TensorSpec((output_size, ))``, where ``output_size`` is
+                inferred from network output. Otherwise, the output tensor
+                spec will be ``output_tensor_spec`` and the network output
+                will be reshaped according to ``output_tensor_spec``.
+                Note that ``output_tensor_spec`` is only used for reshaping
+                the network outputs for interpretation purpose and is not used
+                for specifying any network layers.
             input_preprocessors (nested InputPreprocessor): a nest of
                 ``InputPreprocessor``, each of which will be applied to the
                 corresponding input. If not None, then it must have the same
@@ -538,6 +550,7 @@ class EncodingNetwork(PreprocessorNetwork):
             kernel_initializer (Callable): initializer for all the layers but
                 the last layer. If None, a variance_scaling_initializer will be
                 used.
+            use_fc_bn (bool): whether use Batch Normalization for fc layers.
             last_layer_size (int): an optional size of an additional layer
                 appended at the very end. Note that if ``last_activation`` is
                 specified, ``last_layer_size`` has to be specified explicitly.
@@ -545,6 +558,8 @@ class EncodingNetwork(PreprocessorNetwork):
                 additional layer specified by ``last_layer_size``. Note that if
                 ``last_layer_size`` is not None, ``last_activation`` has to be
                 specified explicitly.
+            last_use_fc_bn (bool): whether use Batch Normalization for the last
+                fc layer.
             last_kernel_initializer (Callable): initializer for the the
                 additional layer specified by ``last_layer_size``.
                 If None, it will be the same with ``kernel_initializer``. If
@@ -599,6 +614,7 @@ class EncodingNetwork(PreprocessorNetwork):
                     input_size,
                     size,
                     activation=activation,
+                    use_bn=use_fc_bn,
                     kernel_initializer=kernel_initializer))
             input_size = size
 
@@ -617,11 +633,23 @@ class EncodingNetwork(PreprocessorNetwork):
                     input_size,
                     last_layer_size,
                     activation=last_activation,
+                    use_bn=last_use_fc_bn,
                     kernel_initializer=last_kernel_initializer))
             input_size = last_layer_size
 
-        self._output_spec = TensorSpec(
-            (input_size, ), dtype=self._processed_input_tensor_spec.dtype)
+        if output_tensor_spec is not None:
+            assert output_tensor_spec.numel == input_size, (
+                "network output "
+                "size {a} is inconsisent with specified out_tensor_spec "
+                "of size {b}".format(a=input_size, b=output_tensor_spec.numel))
+            self._output_spec = TensorSpec(
+                output_tensor_spec.shape,
+                dtype=self._processed_input_tensor_spec.dtype)
+            self._reshape_output = True
+        else:
+            self._output_spec = TensorSpec(
+                (input_size, ), dtype=self._processed_input_tensor_spec.dtype)
+            self._reshape_output = False
 
     def forward(self, inputs, state=()):
         """
@@ -632,24 +660,40 @@ class EncodingNetwork(PreprocessorNetwork):
         z, state = super().forward(inputs, state)
         if self._img_encoding_net is not None:
             z, _ = self._img_encoding_net(z)
+        if alf.summary.should_summarize_output():
+            name = ('summarize_output/' + self.name + '.fc.0.' + 'input_norm.'
+                    + common.exe_mode_name())
+            alf.summary.scalar(
+                name=name, data=torch.mean(z.norm(dim=list(range(1, z.ndim)))))
+        i = 0
         for fc in self._fc_layers:
             z = fc(z)
+            if alf.summary.should_summarize_output():
+                name = ('summarize_output/' + self.name + '.fc.' + str(i) +
+                        '.output_norm.' + common.exe_mode_name())
+                alf.summary.scalar(
+                    name=name,
+                    data=torch.mean(z.norm(dim=list(range(1, z.ndim)))))
+            i += 1
+
+        if self._reshape_output:
+            z = z.reshape(z.shape[0], *self._output_spec.shape)
         return z, state
 
     def make_parallel(self, n):
-        """Make a parllelized version of this network.
+        """Make a parallelized version of this network.
 
         A parallel network has ``n`` copies of network with the same structure but
         different independently initialized parameters.
 
         For supported network structures (currently, networks with only FC layers)
-        it will create ``ParallelCriticNetwork`` (PCN). Otherwise, it will
-        create a ``NaiveParallelNetwork`` (NPN). However, PCN is not always
+        it will create ``ParallelEncodingNetwork`` (PEN). Otherwise, it will
+        create a ``NaiveParallelNetwork`` (NPN). However, PEN is not always
         faster than NPN. Especially for small ``n`` and large batch_size. See
         ``test_make_parallel()`` in critic_networks_test.py for detail.
 
         Returns:
-            Network: A paralle network
+            Network: A parallel network
         """
         if (self.saved_args.get('input_preprocessors') is None and
             (self._preprocessing_combiner == math_ops.identity or isinstance(
@@ -659,6 +703,8 @@ class EncodingNetwork(PreprocessorNetwork):
             parallel_enc_net_args.update(n=n, name="parallel_" + self.name)
             return ParallelEncodingNetwork(**parallel_enc_net_args)
         else:
+            common.warning_once(
+                " ``NaiveParallelNetwork`` is used by ``make_parallel()`` !")
             return super().make_parallel(n)
 
 
@@ -671,15 +717,18 @@ class ParallelEncodingNetwork(PreprocessorNetwork):
     def __init__(self,
                  input_tensor_spec,
                  n,
+                 output_tensor_spec=None,
                  input_preprocessors=None,
                  preprocessing_combiner=None,
                  conv_layer_params=None,
                  fc_layer_params=None,
                  activation=torch.relu_,
                  kernel_initializer=None,
+                 use_fc_bn=False,
                  last_layer_size=None,
                  last_activation=None,
                  last_kernel_initializer=None,
+                 last_use_fc_bn=False,
                  name="ParallelEncodingNetwork"):
         """
         Args:
@@ -687,6 +736,16 @@ class ParallelEncodingNetwork(PreprocessorNetwork):
                 the input. If nested, then ``preprocessing_combiner`` must not be
                 None.
             n (int): number of parallel networks
+            output_tensor_spec (None|TensorSpec): spec for the output, excluding
+                the dimension of paralle networks ``n``. If None, the output
+                tensor spec will be assumed as ``TensorSpec((n, output_size, ))``,
+                where ``output_size`` is inferred from network output.
+                Otherwise, the output tensor spec will be
+                ``TensorSpec((n, *output_tensor_spec.shape))`` and
+                the network output will be reshaped accordingly.
+                Note that ``output_tensor_spec`` is only used for reshaping
+                the network outputs for interpretation purpose and is not used
+                for specifying any network layers.
             input_preprocessors (None): must be ``None``.
             preprocessing_combiner (NestCombiner): preprocessing called on
                 complex inputs. Note that this combiner must also accept
@@ -704,6 +763,7 @@ class ParallelEncodingNetwork(PreprocessorNetwork):
             kernel_initializer (Callable): initializer for all the layers but
                 the last layer. If None, a variance_scaling_initializer will be
                 used.
+            use_fc_bn (bool): whether use Batch Normalization for fc layers.
             last_layer_size (int): an optional size of an additional layer
                 appended at the very end. Note that if ``last_activation`` is
                 specified, ``last_layer_size`` has to be specified explicitly.
@@ -716,6 +776,8 @@ class ParallelEncodingNetwork(PreprocessorNetwork):
                 If None, it will be the same with ``kernel_initializer``. If
                 ``last_layer_size`` is None, ``last_kernel_initializer`` will
                 not be used.
+            last_use_fc_bn (bool): whether use Batch Normalization for the last
+                fc layer.
             name (str):
         """
         super().__init__(
@@ -770,7 +832,8 @@ class ParallelEncodingNetwork(PreprocessorNetwork):
                     size,
                     n,
                     activation=activation,
-                    kernel_initializer=kernel_initializer))
+                    kernel_initializer=kernel_initializer,
+                    use_bn=use_fc_bn))
             input_size = size
 
         if last_layer_size is not None or last_activation is not None:
@@ -789,10 +852,24 @@ class ParallelEncodingNetwork(PreprocessorNetwork):
                     last_layer_size,
                     n,
                     activation=last_activation,
-                    kernel_initializer=last_kernel_initializer))
+                    kernel_initializer=last_kernel_initializer,
+                    use_bn=last_use_fc_bn))
             input_size = last_layer_size
-        self._output_spec = TensorSpec(
-            (n, input_size), dtype=self._processed_input_tensor_spec.dtype)
+
+        if output_tensor_spec is not None:
+            assert output_tensor_spec.numel == input_size, (
+                "network output "
+                "size {a} is inconsisent with specified out_tensor_spec "
+                "of size {b}".format(a=input_size, b=output_tensor_spec.numel))
+            self._output_spec = TensorSpec(
+                (n, *output_tensor_spec.shape),
+                dtype=self._processed_input_tensor_spec.dtype)
+            self._reshape_output = True
+        else:
+            self._output_spec = TensorSpec(
+                (n, input_size), dtype=self._processed_input_tensor_spec.dtype)
+            self._reshape_output = False
+
         self._n = n
 
     def forward(self, inputs, state=()):
@@ -803,13 +880,15 @@ class ParallelEncodingNetwork(PreprocessorNetwork):
         # call super to preprocess inputs
         z, state = super().forward(inputs, state, max_outer_rank=2)
         if self._img_encoding_net is None and len(self._fc_layers) == 0:
-            if inputs.ndim == 2:
+            if z.ndim == 2:
                 z = z.unsqueeze(1).expand(-1, self._n, *z.shape[1:])
         else:
             if self._img_encoding_net is not None:
                 z, _ = self._img_encoding_net(z)
             for fc in self._fc_layers:
                 z = fc(z)
+        if self._reshape_output:
+            z = z.reshape(z.shape[0], *self._output_spec.shape)
         return z, state
 
 

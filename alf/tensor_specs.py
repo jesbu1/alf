@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -93,6 +93,11 @@ class TensorSpec(object):
         return self._shape
 
     @property
+    def numel(self):
+        """Returns the number of elements."""
+        return int(np.prod(self._shape))
+
+    @property
     def ndim(self):
         """Return the rank of the tensor."""
         return len(self._shape)
@@ -127,6 +132,12 @@ class TensorSpec(object):
     def __reduce__(self):
         return TensorSpec, (self._shape, self._dtype)
 
+    def _calc_shape(self, outer_dims):
+        shape = self._shape
+        if outer_dims is not None:
+            shape = tuple(outer_dims) + shape
+        return shape
+
     def constant(self, value, outer_dims=None):
         """Create a constant tensor from the spec.
 
@@ -138,12 +149,7 @@ class TensorSpec(object):
         Returns:
             tensor (torch.Tensor): a tensor of ``self._dtype``.
         """
-        value = torch.as_tensor(value).to(self._dtype)
-        assert len(value.size()) == 0, "The input value must be a scalar!"
-        shape = self._shape
-        if outer_dims is not None:
-            shape = tuple(outer_dims) + shape
-        return torch.ones(size=shape, dtype=self._dtype) * value
+        return self.ones(outer_dims) * value
 
     def zeros(self, outer_dims=None):
         """Create a zero tensor from the spec.
@@ -155,7 +161,7 @@ class TensorSpec(object):
         Returns:
             tensor (torch.Tensor): a tensor of ``self._dtype``.
         """
-        return self.constant(0, outer_dims)
+        return torch.zeros(self._calc_shape(outer_dims), dtype=self._dtype)
 
     def numpy_constant(self, value, outer_dims=None):
         """Create a constant np.ndarray from the spec.
@@ -195,7 +201,7 @@ class TensorSpec(object):
         Returns:
             tensor (torch.Tensor): a tensor of ``self._dtype``.
         """
-        return self.constant(1, outer_dims)
+        return torch.ones(self._calc_shape(outer_dims), dtype=self._dtype)
 
     def randn(self, outer_dims=None):
         """Create a tensor filled with random numbers from a std normal dist.
@@ -312,7 +318,7 @@ class BoundedTensorSpec(TensorSpec):
         if outer_dims is not None:
             shape = tuple(outer_dims) + shape
 
-        if self._dtype.is_floating_point:
+        if self.is_continuous:
             uniform = torch.rand(shape, dtype=self._dtype)
             return ((1 - uniform) * torch.as_tensor(self._minimum) +
                     torch.as_tensor(self._maximum) * uniform)
@@ -326,3 +332,28 @@ class BoundedTensorSpec(TensorSpec):
                 high=self._maximum.item() + 1,
                 size=shape,
                 dtype=self._dtype)
+
+    def numpy_sample(self, outer_dims=None):
+        """Sample numpy arrays uniformly given the min/max bounds.
+
+        Args:
+            outer_dims (list[int]): an optional list of integers specifying outer
+                dimensions to add to the spec shape before sampling.
+
+        Returns:
+            np.ndarray: an array of ``self._dtype``
+        """
+        shape = self._shape
+        if outer_dims is not None:
+            shape = tuple(outer_dims) + shape
+
+        if self.is_continuous:
+            uniform = np.random.rand(*shape).astype(
+                torch_dtype_to_str(self._dtype))
+            return (1 - uniform) * self._minimum + self._maximum * uniform
+        else:
+            return np.random.randint(
+                low=self._minimum,
+                high=self._maximum + 1,
+                size=shape,
+                dtype=torch_dtype_to_str(self._dtype))

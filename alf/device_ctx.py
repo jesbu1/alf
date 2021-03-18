@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -70,7 +70,9 @@ class device(object):
 
     def __enter__(self):
         self._prev_device_name = get_default_device()
-        set_default_device(self._device_name)
+        if self._prev_device_name != self._device_name:
+            set_default_device(self._device_name)
 
     def __exit__(self, type, value, traceback):
-        set_default_device(self._prev_device_name)
+        if self._prev_device_name != self._device_name:
+            set_default_device(self._prev_device_name)

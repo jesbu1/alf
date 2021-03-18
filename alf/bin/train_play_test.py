@@ -142,6 +142,13 @@ PPO_TRAIN_CONF = OFF_POLICY_TRAIN_CONF + [
 ]
 PPO_TRAIN_PARAMS = _to_gin_params(PPO_TRAIN_CONF)
 
+MBRL_TRAIN_CONF = OFF_POLICY_TRAIN_CONF + [
+    'TrainerConfig.unroll_length=4',
+    'TrainerConfig.whole_replay_buffer_training=True',
+    'TrainerConfig.clear_replay_buffer=False',
+]
+MBRL_TRAIN_PARAMS = _to_gin_params(MBRL_TRAIN_CONF)
+
 # Run COMMAND in a virtual X server environment
 XVFB_RUN = ['xvfb-run', '-a', '-e', '/dev/stderr']
 
@@ -224,6 +231,7 @@ class TrainPlayTest(alf.test.TestCase):
               skip_checker=None,
               extra_train_params=None,
               test_play=True,
+              test_video_recording=False,
               extra_play_params=None,
               test_perf=True,
               test_perf_func=None):
@@ -235,6 +243,7 @@ class TrainPlayTest(alf.test.TestCase):
                 exception when the test is not available.
             extra_train_params (list[str]): extra params used for training.
             test_play (bool): A bool for test play.
+            test_video_recording (bool): whether test video recording for play.
             extra_play_params (list[str]): extra param used for play.
             test_perf (bool): A bool for check performance.
             test_perf_func (Callable): called as test_perf_func(episode_returns, episode_lengths)
@@ -255,7 +264,8 @@ class TrainPlayTest(alf.test.TestCase):
         with tempfile.TemporaryDirectory() as root_dir:
             self._test_train(gin_file, extra_train_params, root_dir)
             if test_play:
-                self._test_play(root_dir, extra_play_params)
+                self._test_play(root_dir, extra_play_params,
+                                test_video_recording)
             if test_perf and test_perf_func:
                 self._test_performance(root_dir, test_perf_func)
 
@@ -282,18 +292,22 @@ class TrainPlayTest(alf.test.TestCase):
         cmd.extend(extra_params or [])
         run_cmd(cmd=cmd, cwd=examples_dir)
 
-    def _test_play(self, root_dir, extra_params):
+    def _test_play(self, root_dir, extra_params, test_video_recording):
         """Test if it can play successfully using configuration and checkpoints
         saved in root_dir.
 
         Args:
             root_dir (str): Root directory where configuration and checkpoints are saved
             extra_params (list[str]): extra parameters used for play
+            test_video_recording (bool): if True, also test if a video can be
+                recorded.
         """
         cmd = [
             'python3', '-m', 'alf.bin.play',
             '--root_dir=%s' % root_dir, '--num_episodes=1'
         ]
+        if test_video_recording:
+            cmd.append('--record_file=%s/play.mp4' % root_dir)
         if 'DISPLAY' not in os.environ:
             cmd = XVFB_RUN + cmd
         cmd.extend(extra_params or [])
@@ -324,7 +338,10 @@ class TrainPlayTest(alf.test.TestCase):
             self.assertGreater(returns[-1], 195)
             self.assertGreater(lengths[-1], 195)
 
-        self._test(gin_file='ac_cart_pole.gin', test_perf_func=_test_func)
+        self._test(
+            gin_file='ac_cart_pole.gin',
+            test_perf_func=_test_func,
+            test_video_recording=True)
 
     def test_ac_simple_navigation(self):
         self._test(
@@ -374,11 +391,11 @@ class TrainPlayTest(alf.test.TestCase):
             skip_checker=self._skip_if_mario_unavailable,
             extra_train_params=ON_POLICY_TRAIN_PARAMS)
 
-    @unittest.skip(SKIP_TODO_MESSAGE)
     def test_merlin_dmlab_collect_good_objects(self):
         self._test(
-            gin_file='icm_super_mario_intrinsic_only.gin',
+            gin_file='merlin_dmlab_collect_good_objects.gin',
             skip_checker=self._skip_if_dmlab_unavailable,
+            test_play=False,  # render mode 'human' is not implemented
             extra_train_params=ON_POLICY_TRAIN_PARAMS)
 
     @unittest.skip(SKIP_TODO_MESSAGE)
@@ -443,6 +460,11 @@ class TrainPlayTest(alf.test.TestCase):
             gin_file='sac_bipedal_walker.gin',
             extra_train_params=OFF_POLICY_TRAIN_PARAMS)
 
+    def test_dyna_actrepeat_sac_bipedal_walker(self):
+        self._test(
+            gin_file='dyna_actrepeat_sac_bipedalwalker.gin',
+            extra_train_params=OFF_POLICY_TRAIN_PARAMS)
+
     def test_sac_fetchreach(self):
         self._test(
             gin_file="sac_fetchreach.gin",
@@ -452,6 +474,12 @@ class TrainPlayTest(alf.test.TestCase):
     def test_sac_fetchslide(self):
         self._test(
             gin_file="sac_fetchslide.gin",
+            skip_checker=self._skip_if_mujoco_unavailable,
+            extra_train_params=OFF_POLICY_TRAIN_PARAMS)
+
+    def test_dyna_actrepeat_sac_pickplace(self):
+        self._test(
+            gin_file="dyna_actrepeat_sac_pickplace.gin",
             skip_checker=self._skip_if_mujoco_unavailable,
             extra_train_params=OFF_POLICY_TRAIN_PARAMS)
 
@@ -473,6 +501,17 @@ class TrainPlayTest(alf.test.TestCase):
             self.assertGreater(returns[-1], -200)
 
         self._test(gin_file='sac_pendulum.gin', test_perf_func=_test_func)
+
+    def test_mdq_pendulum(self):
+        self._test(
+            gin_file='mdq_pendulum.gin',
+            extra_train_params=OFF_POLICY_TRAIN_PARAMS)
+
+    def test_mdq_halfcheetah(self):
+        self._test(
+            gin_file="mdq_halfcheetah.gin",
+            skip_checker=self._skip_if_mujoco_unavailable,
+            extra_train_params=OFF_POLICY_TRAIN_PARAMS)
 
     @unittest.skip(SKIP_TODO_MESSAGE)
     def test_sarsa_pendulum(self):
@@ -519,6 +558,20 @@ class TrainPlayTest(alf.test.TestCase):
     def test_trac_sac_pendulum(self):
         self._test(
             gin_file='trac_sac_pendulum.gin',
+            extra_train_params=OFF_POLICY_TRAIN_PARAMS)
+
+    def test_mbrl_pendulum(self):
+        self._test(
+            gin_file='mbrl_pendulum.gin', extra_train_params=MBRL_TRAIN_PARAMS)
+
+    def test_mbrl_latent_pendulum(self):
+        self._test(
+            gin_file='mbrl_latent_pendulum.gin',
+            extra_train_params=OFF_POLICY_TRAIN_PARAMS)
+
+    def test_muzero_tic_tac_toe(self):
+        self._test(
+            gin_file='muzero_tic_tac_toe.gin',
             extra_train_params=OFF_POLICY_TRAIN_PARAMS)
 
     @classmethod

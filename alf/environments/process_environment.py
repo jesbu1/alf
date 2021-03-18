@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -83,6 +83,7 @@ class ProcessEnvironment(object):
         self._env_id = env_id
         self._observation_spec = None
         self._action_spec = None
+        self._reward_spec = None
         self._time_step_spec = None
         self._env_info_spec = None
 
@@ -124,6 +125,11 @@ class ProcessEnvironment(object):
         if not self._action_spec:
             self._action_spec = self.call('action_spec')()
         return self._action_spec
+
+    def reward_spec(self):
+        if not self._reward_spec:
+            self._reward_spec = self.call('reward_spec')()
+        return self._reward_spec
 
     def time_step_spec(self):
         if not self._time_step_spec:

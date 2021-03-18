@@ -13,6 +13,7 @@
 # limitations under the License.
 """Wrappers for gym (numpy) environments. """
 
+from absl import logging
 from collections import deque
 import copy
 import cv2
@@ -22,7 +23,7 @@ import numpy as np
 import random
 
 import alf
-from alf.nest.utils import transform_nest
+from alf.nest import transform_nest
 
 
 def transform_space(observation_space, field, func):
@@ -174,7 +175,11 @@ class ImageChannelFirst(BaseObservationWrapper):
 
 @gin.configurable
 class FrameStack(BaseObservationWrapper):
-    """Stack previous `stack_size` frames, applied to Gym env."""
+    """Stack previous `stack_size` frames, applied to Gym env.
+
+    This is deprecated. Please use ``alf.algorithms.data_transformer.FrameStacker``,
+    which is more memory-efficient.
+    """
 
     def __init__(self,
                  env,
@@ -191,6 +196,9 @@ class FrameStack(BaseObservationWrapper):
             fields (list[str]): fields to be stacked, A field str is a multi-level
                 path denoted by "A.B.C". If None, then non-nested observation is stacked.
         """
+        logging.warning(
+            "FrameStack is deprecated. Please use data_transformer.FrameStacker "
+            "instead, which is more memory-efficient")
         self._channel_order = channel_order
         assert channel_order in ['channels_last', 'channels_first']
         if self._channel_order == 'channels_last':
@@ -265,12 +273,20 @@ class FrameSkip(gym.Wrapper):
         obs = None
         accumulated_reward = 0
         done = False
-        info = None
+        info = {}
+        num_env_frames = 0
         for _ in range(self._skip):
             obs, reward, done, info = self.env.step(action)
             accumulated_reward += reward
+            if 'num_env_frames' in info:
+                # in case FrameSkip wrapper is being nested:
+                n_steps = info['num_env_frames']
+            else:
+                n_steps = 1
+            num_env_frames += n_steps
             if done:
                 break
+        info['num_env_frames'] = num_env_frames
         return obs, accumulated_reward, done, info
 
     def reset(self, **kwargs):
@@ -467,6 +483,8 @@ class DMAtariPreprocessing(gym.Wrapper):
         accumulated_reward = 0.
         life_lost = False
 
+        info = {}
+        num_env_frames = 0
         for time_step in range(self.frame_skip):
             # We bypass the Gym observation altogether and directly fetch the
             # grayscale image from the ALE. This is a little faster.
@@ -474,6 +492,12 @@ class DMAtariPreprocessing(gym.Wrapper):
             life_lost = self.env.ale.lives() < self._lives
             self._lives = self.env.ale.lives()
             accumulated_reward += reward
+            if 'num_env_frames' in info:
+                # in case FrameSkip wrapper is being nested:
+                n_steps = info['num_env_frames']
+            else:
+                n_steps = 1
+            num_env_frames += n_steps
             if game_over or life_lost:
                 break
             # We max-pool over the last two frames, in grayscale.
@@ -481,6 +505,7 @@ class DMAtariPreprocessing(gym.Wrapper):
                 t = time_step - (self.frame_skip - 2)
                 # when frame_skip==1, self.screen_buffer[1] will be filled!
                 self._fetch_grayscale_observation(self.screen_buffer[t])
+        info['num_env_frames'] = num_env_frames
 
         if self.frame_skip == 1:
             self.screen_buffer[0] = self.screen_buffer[1]
@@ -529,10 +554,11 @@ class DMAtariPreprocessing(gym.Wrapper):
         return np.expand_dims(int_image, axis=2)
 
 
+@gin.configurable
 class ContinuousActionClip(gym.ActionWrapper):
     """Clip continuous actions according to the action space."""
 
-    def __init__(self, env):
+    def __init__(self, env, min_v=-1.e9, max_v=1.e9):
         """Create an ContinuousActionClip gym wrapper.
 
         Args:
@@ -540,16 +566,88 @@ class ContinuousActionClip(gym.ActionWrapper):
         """
         super(ContinuousActionClip, self).__init__(env)
 
+        def _space_bounds(space):
+            if isinstance(space, gym.spaces.Box):
+                return np.maximum(space.low, min_v), np.minimum(
+                    space.high, max_v)
+            else:
+                return min_v, max_v
+
+        self.bounds = alf.nest.map_structure(_space_bounds, self.action_space)
+
     def action(self, action):
-        def _clip_action(space, action):
+        def _clip_action(space, action, bounds):
             # Check if the action is corrupted or not.
             if np.any(np.isnan(action)):
                 raise ValueError(
                     "NAN action detected! action: {}".format(action))
             if isinstance(space, gym.spaces.Box):
-                action = np.maximum(np.minimum(action, space.high), space.low)
+                action = np.clip(action, bounds[0], bounds[1])
             return action
 
-        action = alf.nest.map_structure(_clip_action, self.action_space,
-                                        action)
+        action = alf.nest.map_structure_up_to(
+            action, _clip_action, self.action_space, action, self.bounds)
         return action
+
+
+@gin.configurable
+class ContinuousActionMapping(gym.ActionWrapper):
+    """Map continuous actions to a desired action space, while keeping discrete
+    actions unchanged."""
+
+    def __init__(self, env, low, high):
+        """
+        Args:
+            env (gym.Env): Gym env to be wrapped
+            low (float): the action lower bound to map to.
+            high (float): the action higher bound to map to.
+        """
+        super(ContinuousActionMapping, self).__init__(env)
+
+        def _space_bounds(space):
+            if isinstance(space, gym.spaces.Box):
+                assert np.all(np.isfinite(space.low))
+                assert np.all(np.isfinite(space.high))
+                return (space.low, space.high)
+
+        self._bounds = alf.nest.map_structure(_space_bounds, self.action_space)
+        self.action_space = alf.nest.map_structure(
+            lambda space: (gym.spaces.Box(
+                low=low, high=high, shape=space.shape, dtype=space.dtype)
+                           if isinstance(space, gym.spaces.Box) else space),
+            self.action_space)
+
+    def action(self, action):
+        def _scale_back(a, b, space):
+            if isinstance(space, gym.spaces.Box):
+                # a and b should be mutually broadcastable
+                b0, b1 = b
+                a0, a1 = space.low, space.high
+                return (a - a0) / (a1 - a0) * (b1 - b0) + b0
+            return a
+
+        # map action back to its original space
+        action = alf.nest.map_structure_up_to(action, _scale_back, action,
+                                              self._bounds, self.action_space)
+        return action
+
+
+@gin.configurable
+class NormalizedAction(ContinuousActionMapping):
+    """Normalize actions to ``[-1, 1]``. This normalized action space is
+    friendly to algorithms that computes action entropy, e.g., SAC."""
+
+    def __init__(self, env):
+        super().__init__(env, low=-1., high=1.)
+
+
+@gin.configurable
+class NonEpisodicEnv(gym.Wrapper):
+    """Make a gym environment non-episodic by always setting ``done=False``."""
+
+    def __init__(self, env):
+        super().__init__(env)
+
+    def step(self, action):
+        ob, reward, done, info = self.env.step(action)
+        return ob, reward, False, info

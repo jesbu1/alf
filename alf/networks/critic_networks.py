@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -35,7 +35,7 @@ def _check_action_specs_for_critic_networks(
     if len(nest.flatten(action_spec)) > 1:
         assert action_preprocessing_combiner is not None, (
             "An action combiner is needed when there are multiple action specs:"
-            " %s" % action_spec)
+            " {}".format(action_spec))
 
     def _check_individual(spec, proc):
         if spec.is_discrete:
@@ -64,6 +64,7 @@ class CriticNetwork(Network):
 
     def __init__(self,
                  input_tensor_spec,
+                 output_tensor_spec=TensorSpec(()),
                  observation_input_processors=None,
                  observation_preprocessing_combiner=None,
                  observation_conv_layer_params=None,
@@ -74,12 +75,14 @@ class CriticNetwork(Network):
                  joint_fc_layer_params=None,
                  activation=torch.relu_,
                  kernel_initializer=None,
+                 use_fc_bn=False,
                  name="CriticNetwork"):
         """
 
         Args:
             input_tensor_spec: A tuple of ``TensorSpec``s ``(observation_spec, action_spec)``
                 representing the inputs.
+            output_tensor_spec (TensorSpec): spec for the output
             observation_input_preprocessors (nested InputPreprocessor): a nest of
                 ``InputPreprocessor``, each of which will be applied to the
                 corresponding observation input.
@@ -105,6 +108,8 @@ class CriticNetwork(Network):
             kernel_initializer (Callable): initializer for all the layers but
                 the last layer. If none is provided a variance_scaling_initializer
                 with uniform distribution will be used.
+            use_fc_bn (bool): whether use Batch Normalization for the internal
+                FC layers (i.e. FC layers beside the last one).
             name (str):
         """
         super().__init__(input_tensor_spec, name=name)
@@ -125,7 +130,9 @@ class CriticNetwork(Network):
             conv_layer_params=observation_conv_layer_params,
             fc_layer_params=observation_fc_layer_params,
             activation=activation,
-            kernel_initializer=kernel_initializer)
+            kernel_initializer=kernel_initializer,
+            use_fc_bn=use_fc_bn,
+            name=self.name + ".obs_encoder")
 
         _check_action_specs_for_critic_networks(action_spec,
                                                 action_input_processors,
@@ -136,7 +143,9 @@ class CriticNetwork(Network):
             preprocessing_combiner=action_preprocessing_combiner,
             fc_layer_params=action_fc_layer_params,
             activation=activation,
-            kernel_initializer=kernel_initializer)
+            kernel_initializer=kernel_initializer,
+            use_fc_bn=use_fc_bn,
+            name=self.name + ".action_encoder")
 
         last_kernel_initializer = functools.partial(
             torch.nn.init.uniform_, a=-0.003, b=0.003)
@@ -147,11 +156,13 @@ class CriticNetwork(Network):
             fc_layer_params=joint_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
-            last_layer_size=1,
+            last_layer_size=output_tensor_spec.numel,
             last_activation=math_ops.identity,
-            last_kernel_initializer=last_kernel_initializer)
+            use_fc_bn=use_fc_bn,
+            last_kernel_initializer=last_kernel_initializer,
+            name=self.name + ".joint_encoder")
 
-        self._output_spec = TensorSpec(())
+        self._output_spec = output_tensor_spec
 
     def forward(self, inputs, state=()):
         """Computes action-value given an observation.
@@ -171,7 +182,9 @@ class CriticNetwork(Network):
         encoded_action, _ = self._action_encoder(actions)
         joint = torch.cat([encoded_obs, encoded_action], -1)
         action_value, _ = self._joint_encoder(joint)
-        return torch.squeeze(action_value, -1), state
+        action_value = action_value.reshape(action_value.shape[0],
+                                            *self._output_spec.shape)
+        return action_value, state
 
     def make_parallel(self, n):
         """Create a ``ParallelCriticNetwork`` using ``n`` replicas of ``self``.
@@ -201,7 +214,8 @@ class ParallelCriticNetwork(Network):
         self._obs_encoder = critic_network._obs_encoder.make_parallel(n)
         self._action_encoder = critic_network._action_encoder.make_parallel(n)
         self._joint_encoder = critic_network._joint_encoder.make_parallel(n)
-        self._output_spec = TensorSpec((n, ))
+        self._output_spec = TensorSpec((n, ) +
+                                       critic_network.output_spec.shape)
 
     def forward(self, inputs, state=()):
         """Computes action-value given an observation.
@@ -222,7 +236,9 @@ class ParallelCriticNetwork(Network):
         encoded_action, _ = self._action_encoder(actions)
         joint = torch.cat([encoded_obs, encoded_action], -1)
         action_value, _ = self._joint_encoder(joint)
-        return torch.squeeze(action_value, -1), state
+        action_value = action_value.reshape(action_value.shape[0],
+                                            *self._output_spec.shape)
+        return action_value, state
 
 
 @gin.configurable
@@ -236,6 +252,7 @@ class CriticRNNNetwork(Network):
 
     def __init__(self,
                  input_tensor_spec,
+                 output_tensor_spec=TensorSpec(()),
                  observation_input_processors=None,
                  observation_preprocessing_combiner=None,
                  observation_conv_layer_params=None,
@@ -254,6 +271,7 @@ class CriticRNNNetwork(Network):
         Args:
             input_tensor_spec: A tuple of ``TensorSpec``s ``(observation_spec, action_spec)``
                 representing the inputs.
+            ourput_tensor_spec (TensorSpec): spec for the output
             observation_input_preprocessors (nested InputPreprocessor): a nest of
                 ``InputPreprocessor``, each of which will be applied to the
                 corresponding observation input.
@@ -333,11 +351,11 @@ class CriticRNNNetwork(Network):
             post_fc_layer_params=critic_fc_layer_params,
             activation=activation,
             kernel_initializer=kernel_initializer,
-            last_layer_size=1,
+            last_layer_size=output_tensor_spec.numel,
             last_activation=math_ops.identity,
             last_kernel_initializer=last_kernel_initializer)
 
-        self._output_spec = TensorSpec(())
+        self._output_spec = output_tensor_spec
 
     def forward(self, inputs, state):
         """Computes action-value given an observation.
@@ -358,7 +376,9 @@ class CriticRNNNetwork(Network):
         joint = torch.cat([encoded_obs, encoded_action], -1)
         encoded_joint, _ = self._joint_encoder(joint)
         action_value, state = self._lstm_encoding_net(encoded_joint, state)
-        return torch.squeeze(action_value, -1), state
+        action_value = action_value.reshape(action_value.shape[0],
+                                            *self._output_spec.shape)
+        return action_value, state
 
     @property
     def state_spec(self):

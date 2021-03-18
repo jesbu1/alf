@@ -14,38 +14,51 @@
 
 from abc import abstractmethod
 
+import gin
 import torch
 import torch.nn as nn
 
 import alf
 from alf.nest.utils import get_outer_rank
 from alf.tensor_specs import TensorSpec
-from alf.utils import math_ops
+from alf.utils import common, math_ops
 from alf.utils.averager import WindowAverager, EMAverager, AdaptiveAverager
 
 
 class Normalizer(nn.Module):
+    MAX_DIMS_TO_OUTPUT = 30
+
     def __init__(self,
                  tensor_spec,
                  auto_update=True,
+                 zero_mean=True,
+                 unit_std=False,
                  variance_epsilon=1e-10,
+                 debug_summaries=False,
                  name="Normalizer"):
-        """Create a base normalizer using a first-moment and a second-moment
+        r"""Create a base normalizer using a first-moment and a second-moment
         averagers.
 
-        Given weights w_i and samples x_i, i = 1...n, let
+        Given weights :math:`w_i` and samples :math:`x_i, i = 1 \cdots n`, let
 
-        m   = \sum_i w_i * x_i     (first moment)
-        m2  = \sum_i w_i * x_i^2   (second moment)
+        .. math::
+
+            \begin{array}{ll}
+            m   & = \sum_i w_i * x_i     (first moment)
+            m2  & = \sum_i w_i * x_i^2   (second moment)
 
         then
 
-        var = \sum_i w_i * (x_i - m)^2
-            = \sum_i w_i * (x_i^2 + m^2 - 2*x_i*m)
-            = m2 + m^2 - 2m^2
-            = m2 - m^2
+        .. math::
 
-        which is the same result with the case when w_1=w_2=...=w_n=(1/n)
+            \begin{array}{ll}
+            var & = \sum_i w_i * (x_i - m)^2
+                & = \sum_i w_i * (x_i^2 + m^2 - 2*x_i*m)
+                & = m2 + m^2 - 2m^2
+                & = m2 - m^2
+            \end{array}
+
+        which is the same result with the case when :math:`w_1=w_2=...=w_n=(1/n)`
 
         NOTE: tf_agents' normalizer maintains a running average of variance which
             is not correct mathematically, because the estimated variance contains
@@ -57,7 +70,11 @@ class Normalizer(nn.Module):
             auto_update (bool): If True, automatically update mean and variance
               for each call to `normalize()`. Otherwise, the user needs to call
               `update()`
+            zero_mean (bool): whether to make the normalized value be zero-mean
+            unit_std (bool): whether assume a unit std or not when normalizaing.
+                If True, then the rewards are just subtracted by the mean.
             variance_epsilon (float): a small value added to std for normalizing
+            debug_summaries (bool): True if debug summaries should be created.
             name (str):
         """
         super().__init__()
@@ -65,8 +82,17 @@ class Normalizer(nn.Module):
         self._auto_update = auto_update
         self._variance_epsilon = variance_epsilon
         self._tensor_spec = tensor_spec
-        self._mean_averager = self._create_averager()
-        self._m2_averager = self._create_averager()
+        assert zero_mean or not unit_std, (
+            "Must at least subtract mean or divide std!")
+        if zero_mean:
+            self._mean_averager = self._create_averager()
+        else:
+            self._mean_averager = None
+        if not unit_std:
+            self._m2_averager = self._create_averager()
+        else:
+            self._m2_averager = None
+        self._debug_summaries = debug_summaries
 
     @abstractmethod
     def _create_averager(self):
@@ -78,9 +104,51 @@ class Normalizer(nn.Module):
     def update(self, tensor):
         """Update the statistics given a new tensor.
         """
-        self._mean_averager.update(tensor)
-        sqr_tensor = alf.nest.map_structure(math_ops.square, tensor)
-        self._m2_averager.update(sqr_tensor)
+        if self._mean_averager:
+            self._mean_averager.update(tensor)
+        if self._m2_averager:
+            sqr_tensor = alf.nest.map_structure(math_ops.square, tensor)
+            self._m2_averager.update(sqr_tensor)
+        if self._debug_summaries and alf.summary.should_record_summaries():
+            suffix = common.exe_mode_name()
+
+            def _reduce_along_batch_dims(x, spec, op):
+                bs = alf.layers.BatchSquash(get_outer_rank(x, spec))
+                x = bs.flatten(x)
+                x = op(x, dim=0)[0]
+                return x
+
+            def _summary(name, val):
+                with alf.summary.scope(self._name):
+                    if val.ndim == 0:
+                        alf.summary.scalar(name + "." + suffix, val)
+                    elif (val.shape[0] < self.MAX_DIMS_TO_OUTPUT
+                          and alf.summary.should_summarize_output()):
+                        for i in range(val.shape[0]):
+                            alf.summary.scalar(
+                                name + "_" + str(i) + "." + suffix, val[i])
+                    else:
+                        alf.summary.scalar(name + ".min." + suffix, val.min())
+                        alf.summary.scalar(name + ".max." + suffix, val.max())
+
+            def _summarize_all(path, t, m2, m):
+                if path:
+                    path += "."
+                spec = TensorSpec.from_tensor(m2 or m)
+                _summary(path + "tensor.batch_min",
+                         _reduce_along_batch_dims(t, spec, torch.min))
+                _summary(path + "tensor.batch_max",
+                         _reduce_along_batch_dims(t, spec, torch.max))
+                if m is not None:
+                    _summary(path + "mean", m)
+                    if m2 is not None:
+                        _summary(path + "var", m2 - math_ops.square(m))
+                elif m2 is not None:
+                    _summary(path + "second_moment", m2)
+
+            m2 = (self._m2_averager.get() if self._m2_averager else None)
+            m = (self._mean_averager.get() if self._mean_averager else None)
+            alf.nest.py_map_structure_with_path(_summarize_all, tensor, m2, m)
 
     def normalize(self, tensor, clip_value=-1.0):
         """
@@ -97,19 +165,35 @@ class Normalizer(nn.Module):
         """
         if self._auto_update:
             self.update(tensor)
+        return self._normalize(tensor, clip_value)
 
-        def _normalize(m, m2, t):
+    def _normalize(self, tensor, clip_value=-1.0):
+        def _normalize(m2, t, m):
             # in some extreme cases, due to floating errors, var might be a very
             # large negative value (close to 0)
-            var = torch.relu(m2 - math_ops.square(m))
+            if m2 is not None:
+                if m is not None:
+                    var = torch.relu(m2 - math_ops.square(m))
+                else:
+                    var = m2
+                    m = torch.zeros_like(m2)
+            else:
+                var = torch.ones_like(m)
+
             t = alf.layers.normalize_along_batch_dims(
                 t, m, var, variance_epsilon=self._variance_epsilon)
             if clip_value > 0:
                 t = torch.clamp(t, -clip_value, clip_value)
             return t
 
-        return alf.nest.map_structure(_normalize, self._mean_averager.get(),
-                                      self._m2_averager.get(), tensor)
+        m2 = (self._m2_averager.get() if self._m2_averager else None)
+        m = (self._mean_averager.get() if self._mean_averager else None)
+        return alf.nest.map_structure(_normalize, m2, tensor, m)
+
+    def forward(self, input):
+        if self.training:
+            self.update(input)
+        return self._normalize(input)
 
 
 class WindowNormalizer(Normalizer):
@@ -120,7 +204,10 @@ class WindowNormalizer(Normalizer):
                  tensor_spec,
                  window_size=1000,
                  auto_update=True,
+                 zero_mean=True,
+                 unit_std=False,
                  variance_epsilon=1e-10,
+                 debug_summaries=False,
                  name="WindowNormalizer"):
         """
         Args:
@@ -130,14 +217,21 @@ class WindowNormalizer(Normalizer):
             auto_update (bool): If True, automatically update mean and variance
               for each call to `normalize()`. Otherwise, the user needs to call
               `update()`
+            zero_mean (bool): whether to make the normalized value be zero-mean
+            unit_std (bool): whether assume a unit std or not when normalizaing.
+                If True, then the rewards are just subtracted by the mean.
             variance_epislon (float): a small value added to std for normalizing
+            debug_summaries (bool): whether to generate debug summaries
             name (str):
         """
         self._window_size = window_size
         super(WindowNormalizer, self).__init__(
             tensor_spec=tensor_spec,
             auto_update=auto_update,
+            zero_mean=zero_mean,
+            unit_std=unit_std,
             variance_epsilon=variance_epsilon,
+            debug_summaries=debug_summaries,
             name=name)
 
     def _create_averager(self):
@@ -150,13 +244,19 @@ class ScalarWindowNormalizer(WindowNormalizer):
     def __init__(self,
                  window_size=1000,
                  auto_update=True,
+                 zero_mean=True,
+                 unit_std=False,
                  variance_epsilon=1e-10,
+                 debug_summaries=False,
                  name="ScalarWindowNormalizer"):
         super(ScalarWindowNormalizer, self).__init__(
             tensor_spec=TensorSpec((), dtype='float32'),
             window_size=window_size,
             auto_update=auto_update,
+            zero_mean=zero_mean,
+            unit_std=unit_std,
             variance_epsilon=variance_epsilon,
+            debug_summaries=debug_summaries,
             name=name)
 
 
@@ -169,7 +269,10 @@ class EMNormalizer(Normalizer):
                  tensor_spec,
                  update_rate=1e-3,
                  auto_update=True,
+                 zero_mean=True,
+                 unit_std=False,
                  variance_epsilon=1e-10,
+                 debug_summaries=False,
                  name="EMNormalizer"):
         """
         Args:
@@ -179,14 +282,21 @@ class EMNormalizer(Normalizer):
             auto_update (bool): If True, automatically update mean and variance
               for each call to `normalize()`. Otherwise, the user needs to call
               `update()`
+            zero_mean (bool): whether to make the normalized value be zero-mean
+            unit_std (bool): whether assume a unit std or not when normalizaing.
+                If True, then the rewards are just subtracted by the mean.
             variance_epislon (float): a small value added to std for normalizing
+            debug_summaries (bool): whether to generate debug summaries
             name (str):
         """
         self._update_rate = update_rate
         super(EMNormalizer, self).__init__(
             tensor_spec=tensor_spec,
             auto_update=auto_update,
+            zero_mean=zero_mean,
+            unit_std=unit_std,
             variance_epsilon=variance_epsilon,
+            debug_summaries=debug_summaries,
             name=name)
 
     def _create_averager(self):
@@ -194,26 +304,37 @@ class EMNormalizer(Normalizer):
         return EMAverager(self._tensor_spec, self._update_rate)
 
 
+@gin.configurable
 class ScalarEMNormalizer(EMNormalizer):
     def __init__(self,
                  update_rate=1e-3,
                  auto_update=True,
                  variance_epsilon=1e-10,
+                 zero_mean=True,
+                 unit_std=False,
+                 debug_summaries=False,
                  name="ScalarEMNormalizer"):
         super(ScalarEMNormalizer, self).__init__(
             tensor_spec=TensorSpec((), dtype='float32'),
             update_rate=update_rate,
             auto_update=auto_update,
+            zero_mean=zero_mean,
+            unit_std=unit_std,
             variance_epsilon=variance_epsilon,
+            debug_summaries=debug_summaries,
             name=name)
 
 
+@gin.configurable
 class AdaptiveNormalizer(Normalizer):
     def __init__(self,
                  tensor_spec,
                  speed=8.0,
                  auto_update=True,
+                 zero_mean=True,
+                 unit_std=False,
                  variance_epsilon=1e-10,
+                 debug_summaries=False,
                  name="AdaptiveNormalizer"):
         """This normalizer gives higher weight to more recent samples for
         calculating mean and variance. Roughly speaking, the weight for each
@@ -228,7 +349,11 @@ class AdaptiveNormalizer(Normalizer):
             auto_update (bool): If True, automatically update mean and variance
               for each call to `normalize()`. Otherwise, the user needs to call
               `update()`
+            zero_mean (bool): whether to make the normalized value be zero-mean
+            unit_std (bool): whether assume a unit std or not when normalizaing.
+                If True, then the rewards are just subtracted by the mean.
             variance_epislon (float): a small value added to std for normalizing
+            debug_summaries (bool): whether to generate debug summaries
             name (str):
         """
         self._speed = speed
@@ -236,6 +361,9 @@ class AdaptiveNormalizer(Normalizer):
             tensor_spec=tensor_spec,
             auto_update=auto_update,
             variance_epsilon=variance_epsilon,
+            zero_mean=zero_mean,
+            unit_std=unit_std,
+            debug_summaries=debug_summaries,
             name=name)
 
     def _create_averager(self):
@@ -244,15 +372,22 @@ class AdaptiveNormalizer(Normalizer):
             tensor_spec=self._tensor_spec, speed=self._speed)
 
 
+@gin.configurable
 class ScalarAdaptiveNormalizer(AdaptiveNormalizer):
     def __init__(self,
                  speed=8.0,
                  auto_update=True,
+                 zero_mean=True,
+                 unit_std=False,
                  variance_epsilon=1e-10,
+                 debug_summaries=False,
                  name="ScalarAdaptiveNormalizer"):
         super(ScalarAdaptiveNormalizer, self).__init__(
             tensor_spec=TensorSpec((), dtype='float32'),
             speed=speed,
             auto_update=auto_update,
+            zero_mean=zero_mean,
+            unit_std=unit_std,
             variance_epsilon=variance_epsilon,
+            debug_summaries=debug_summaries,
             name=name)

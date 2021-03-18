@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -70,20 +70,38 @@ class NestCombiner(abc.ABC):
 
 @gin.configurable
 class NestConcat(NestCombiner):
-    def __init__(self, dim=-1, name="NestConcat"):
-        """A combiner for concatenating all tensors in a nest along the specified
-        axis. It assumes that all tensors have the same tensor spec. Can be used
-        as a preprocessing combiner in ``EncodingNetwork``.
+    def __init__(self, nest_mask=None, dim=-1, name="NestConcat"):
+        """A combiner for selecting from the tensors in a nest and then
+        concatenating them along a specified axis. If nest_mask is None,
+        then all the tensors from the nest will be selected.
+        It assumes that all the selected tensors have the same tensor spec.
+        Can be used as a preprocessing combiner in ``EncodingNetwork``.
 
         Args:
+            nest_mask (nest|None): nest structured mask indicating which of the
+                tensors in the nest to be selected or not, indicated by a
+                value of True/False (1/0). Note that the structure of the mask
+                should be the same as the nest of data to apply this operator on.
+                If is None, then all the tensors from the nest will be selected.
             dim (int): the dim along which the tensors are concatenated
             name (str):
         """
         super(NestConcat, self).__init__(name)
+        self._flat_mask = nest.flatten(nest_mask) if nest_mask else nest_mask
         self._dim = dim
 
     def _combine_flat(self, tensors):
-        return torch.cat(tensors, dim=self._dim)
+        if self._flat_mask is not None:
+            assert len(self._flat_mask) == len(tensors), (
+                "incompatible structures "
+                "between mask and data nest")
+            selected_tensors = []
+            for i, mask_value in enumerate(self._flat_mask):
+                if mask_value:
+                    selected_tensors.append(tensors[i])
+            return torch.cat(selected_tensors, dim=self._dim)
+        else:
+            return torch.cat(tensors, dim=self._dim)
 
 
 @gin.configurable
@@ -133,7 +151,7 @@ class NestMultiply(NestCombiner):
         return self._activation(ret)
 
 
-def stack_nests(nests):
+def stack_nests(nests, dim=0):
     """Stack tensors to a sequence.
 
     All the nest should have same structure and shape. In the resulted nest,
@@ -142,10 +160,17 @@ def stack_nests(nests):
 
     Args:
         nests (list[nest]): list of nests with same structure and shape.
+        dim (int): dimension to insert. Has to be between 0 and the number of
+            dimensions of concatenated tensors (inclusive)
     Returns:
         a nest with same structure as ``nests[0]``.
     """
-    return nest.map_structure(lambda *tensors: torch.stack(tensors), *nests)
+    if len(nests) == 1:
+        return nest.map_structure(lambda tensor: tensor.unsqueeze(dim),
+                                  nests[0])
+    else:
+        return nest.map_structure(lambda *tensors: torch.stack(tensors, dim),
+                                  *nests)
 
 
 def get_outer_rank(tensors, specs):
@@ -169,14 +194,15 @@ def get_outer_rank(tensors, specs):
             are batched but have an incorrect number of outer dims.
     """
 
+    outer_ranks = []
+
     def _get_outer_rank(tensor, spec):
         outer_rank = len(tensor.shape) - len(spec.shape)
         assert outer_rank >= 0
-        assert list(tensor.shape[outer_rank:]) == list(spec.shape)
-        return outer_rank
+        assert tensor.shape[outer_rank:] == spec.shape
+        outer_ranks.append(outer_rank)
 
-    outer_ranks = nest.map_structure(_get_outer_rank, tensors, specs)
-    outer_ranks = nest.flatten(outer_ranks)
+    nest.map_structure(_get_outer_rank, tensors, specs)
     outer_rank = outer_ranks[0]
     assert all([r == outer_rank
                 for r in outer_ranks]), ("Tensors have different "
@@ -184,60 +210,24 @@ def get_outer_rank(tensors, specs):
     return outer_rank
 
 
-def transform_nest(nested, field, func):
-    """Transform the node of a nested structure indicated by ``field`` using
-    ``func``.
-
-    This function can be used to update our ``namedtuple`` structure conveniently,
-    comparing the following two methods:
-
-        .. code-block:: python
-
-            info = info._replace(rl=info.rl._replace(sac=info.rl.sac * 0.5))
-
-    vs.
-
-        .. code-block:: python
-
-            info = transform_nest(info, 'rl.sac', lambda x: x * 0.5)
-
-    The second method is usually shorter, more intuitive, and less error-prone
-    when ``field`` is a long string.
-
+def convert_device(nests, device=None):
+    """Convert the device of the tensors in nests to the specified
+        or to the default device.
     Args:
-        nested (nested Tensor): the structure to be applied the transformation.
-        field (str): If a string, it's the field to be transformed, multi-level
-            path denoted by "A.B.C". If ``None``, then the root object is
-            transformed.
-        func (Callable): transform func, the function will be called as
-            ``func(nested)`` and should return a new nest.
+        nests (nested Tensors): Nested list/tuple/dict of Tensors.
+        device (None|str): the target device, should either be `cuda` or `cpu`.
+            If None, then the default device will be used as the target device.
     Returns:
-        transformed nest
+        nests (nested Tensors): Nested list/tuple/dict of Tensors after device
+            conversion.
+
+    Raises:
+        NotImplementedError if the target device is not one of
+            None, `cpu` or `cuda` when cuda is available, or AssertionError
+            if target device is `cuda` but cuda is unavailable.
+
+
     """
-
-    def _traverse_transform(nested, levels):
-        if not levels:
-            return func(nested)
-        level = levels[0]
-        if nest.is_namedtuple(nested):
-            new_val = _traverse_transform(
-                nested=getattr(nested, level), levels=levels[1:])
-            return nested._replace(**{level: new_val})
-        elif isinstance(nested, dict):
-            new_val = nested.copy()
-            new_val[level] = _traverse_transform(
-                nested=nested[level], levels=levels[1:])
-            return new_val
-        else:
-            raise TypeError("If value is a nest, it must be either " +
-                            "a dict or namedtuple!")
-
-    return _traverse_transform(
-        nested=nested, levels=field.split('.') if field else [])
-
-
-def convert_device(nests):
-    """Convert the device of the tensors in nests to default device."""
 
     def _convert_cuda(tensor):
         if tensor.device.type != 'cuda':
@@ -251,16 +241,21 @@ def convert_device(nests):
         else:
             return tensor
 
-    d = alf.get_default_device()
+    if device is None:
+        d = alf.get_default_device()
+    else:
+        d = device
+
     if d == 'cpu':
         return nest.map_structure(_convert_cpu, nests)
     elif d == 'cuda':
+        assert torch.cuda.is_available(), "cuda is unavailable"
         return nest.map_structure(_convert_cuda, nests)
     else:
         raise NotImplementedError("Unknown device %s" % d)
 
 
-def grad(nested, objective):
+def grad(nested, objective, retain_graph=False):
     """Compute the gradients of an ``objective`` `w.r.t` each variable in
     ``nested``. It will simply call ``torch.autograd.grad`` after flattening the
     nest, and then pack the flat list back to a structure like ``nested``.
@@ -268,9 +263,14 @@ def grad(nested, objective):
     Args:
         nested (nest): a nest of variables that require grads.
         objective (Tensor): a tensor whose gradients will be computed.
+        retain_graph (bool): if True, after autograd the computational graph
+            won't be freed
     """
     return nest.pack_sequence_as(
-        nested, list(torch.autograd.grad(objective, nest.flatten(nested))))
+        nested,
+        list(
+            torch.autograd.grad(
+                objective, nest.flatten(nested), retain_graph=retain_graph)))
 
 
 def zeros_like(nested):

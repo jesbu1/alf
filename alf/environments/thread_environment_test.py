@@ -1,4 +1,4 @@
-# Copyright (c) 2020 Horizon Robotics. All Rights Reserved.
+# Copyright (c) 2020 Horizon Robotics and ALF Contributors. All Rights Reserved.
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -41,7 +41,8 @@ class ThreadEnvironmentTest(alf.test.TestCase):
                                                 minimum=-1.0,
                                                 maximum=1.0)
         self.time_step_spec = ds.time_step_spec(self.observation_spec,
-                                                self.action_spec)
+                                                self.action_spec,
+                                                ts.TensorSpec(()))
 
     def _make_thread_environment(self, constructor=None):
         self._set_default_specs()
