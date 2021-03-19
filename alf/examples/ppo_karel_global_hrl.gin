@@ -28,14 +28,15 @@ create_environment.env_name="Karel"
 create_environment.num_parallel_environments=10
 create_environment.env_load_fn=@suite_karel_env_hrl.load
 create_environment.prl_load_model=True
-create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
+#create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
+create_environment.model_path="/home/jesse/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
 create_environment.n_rollout_steps=20
 
 suite_karel_env_hrl.load.task_definition="custom_reward"
 suite_karel_env_hrl.load.width=8
 suite_karel_env_hrl.load.height=8
 suite_karel_env_hrl.load.env_task="chainSmoker"
-suite_karel_env_hrl.load.max_episode_steps=33
+suite_karel_env_hrl.load.max_episode_steps=20
 suite_karel_env_hrl.load.obv_type="global"
 suite_karel_env_hrl.load.wall_prob=0.25
 suite_karel_env_hrl.load.incorrect_marker_penalty=True
@@ -68,11 +69,11 @@ OneStepTDLoss.td_error_loss_fn=@losses.element_wise_squared_loss
 
 # training config
 TrainerConfig.mini_batch_length=2
-TrainerConfig.unroll_length=33
+TrainerConfig.unroll_length=20
 TrainerConfig.mini_batch_size=128
 TrainerConfig.num_updates_per_train_iter=8
 TrainerConfig.num_iterations=0
-TrainerConfig.num_env_steps=500000
+TrainerConfig.num_env_steps=300000
 TrainerConfig.evaluate=True
 TrainerConfig.eval_interval=100
 TrainerConfig.debug_summaries=False

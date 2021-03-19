@@ -34,7 +34,7 @@ class KarelEnvWrapper(gym.Wrapper):
                 ],
                 dtype=self.observation_space.dtype)
         self.model = model
-        self.action_space = Box(low=np.array([-2] * 5), high = np.array([2] * 5))
+        self.action_space = Box(low=np.array([-2] * 10), high = np.array([2] * 10))
 
     def step(self, action):
         action_plan = self.generate_action_plan(np.expand_dims(action, 0))
@@ -47,10 +47,12 @@ class KarelEnvWrapper(gym.Wrapper):
         return self.observation(ob.astype(np.float32)), float(reward), done, {}
 
     def generate_action_plan(self, z):
-        if isinstance(z, np.ndarray):
+        if isinstance(z, np.ndarray) and np.all(z == 0):
             return [0]
         with torch.no_grad():
-            #z = torch.from_numpy(z)
+            z = torch.from_numpy(z)
+            print(z.device)
+            print(self.model.device)
             action_plan = self.model.decode(z, z, self.model.n_rollout_steps)[0]
             action_plan = action_plan.cpu().detach().tolist()
         return action_plan

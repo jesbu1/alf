@@ -3,19 +3,22 @@
   "use_gpu": true,
   "gpus": [
     0,
-    1
+    1,
+    2,
+    3
   ],
-  "max_worker_num": 6,
+  "max_worker_num": 12,
   "repeats": 5,
   "parameters": {
     "suite_karel_env_hrl.load.env_task": [
       "'cleanHouse'"
     ],
     "TrainerConfig.num_updates_per_train_iter": [
+      5,
       10,
-      25,
-      50,
-      75
+      20,
+      40,
+      60
     ]
   }
 }

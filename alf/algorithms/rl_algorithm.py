@@ -81,7 +81,7 @@ class RLAlgorithm(Algorithm):
                  optimizer=None,
                  debug_summaries=False,
                  name="RLAlgorithm",
-                 detach_action=True):
+                 detach_action=False):
         """
         Args:
             observation_spec (nested TensorSpec): representing the observations.

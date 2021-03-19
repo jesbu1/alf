@@ -119,8 +119,9 @@ def create_environment(env_name='CartPole-v0',
                     nz_enc=128,
                     nz_mid=128,
                     input_res=16,
+                    n_lstm_layers=2,
                     #n_processing_layers=5,
-                    nz_vae=5,
+                    nz_vae=10,
                     n_rollout_steps=n_rollout_steps,
                     device='cuda'
                 )
@@ -153,8 +154,9 @@ def create_environment(env_name='CartPole-v0',
                     nz_enc=128,
                     nz_mid=128,
                     input_res=16,
+                    n_lstm_layers=2,
                     #n_processing_layers=5,
-                    nz_vae=5,
+                    nz_vae=10,
                     n_rollout_steps=n_rollout_steps,
                     device='cpu'
                 )
