@@ -9,6 +9,7 @@ import alf.algorithms.agent
 #
 #observation_spec=@get_observation_spec()
 #action_spec=@get_action_spec()
+RLAlgorithm.model=True
 import alf.algorithms.agent
 import alf.algorithms.sac_algorithm
 
@@ -25,7 +26,7 @@ import alf.environments.suite_karel_env_hrl
 
 # environment config
 create_environment.env_name="Karel"
-create_environment.num_parallel_environments=10
+create_environment.num_parallel_environments=1
 create_environment.env_load_fn=@suite_karel_env_hrl.load
 create_environment.prl_load_model=True
 #create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
@@ -36,7 +37,7 @@ suite_karel_env_hrl.load.task_definition="custom_reward"
 suite_karel_env_hrl.load.width=22
 suite_karel_env_hrl.load.height=14
 suite_karel_env_hrl.load.env_task="cleanHouse"
-suite_karel_env_hrl.load.max_episode_steps=60
+suite_karel_env_hrl.load.max_episode_steps=300
 suite_karel_env_hrl.load.obv_type="local"
 suite_karel_env_hrl.load.wall_prob=0.25
 suite_karel_env_hrl.load.incorrect_marker_penalty=True
@@ -66,7 +67,7 @@ OneStepTDLoss.td_error_loss_fn=@losses.element_wise_squared_loss
 
 # training config
 TrainerConfig.mini_batch_length=2
-TrainerConfig.unroll_length=20
+TrainerConfig.unroll_length=8
 TrainerConfig.mini_batch_size=128
 TrainerConfig.num_updates_per_train_iter=8
 TrainerConfig.num_iterations=0
@@ -74,10 +75,11 @@ TrainerConfig.num_env_steps=300000
 TrainerConfig.evaluate=True
 TrainerConfig.eval_interval=100
 TrainerConfig.debug_summaries=False
-TrainerConfig.summary_interval=5
+TrainerConfig.summary_interval=15
 TrainerConfig.epsilon_greedy=0.
 TrainerConfig.num_checkpoints=1
 TrainerConfig.num_eval_episodes=20
-TrainerConfig.replay_buffer_length=100000
+TrainerConfig.replay_buffer_length=1000000
+
 
 ReplayBuffer.enable_checkpoint=True

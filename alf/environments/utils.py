@@ -129,6 +129,7 @@ def create_environment(env_name='CartPole-v0',
                 model.load_state_dict(torch.load(model_path))
                 model.cuda()
                 model.eval()
+                model = None
                 return model
             model =_load_model(model_path)
             alf_env = thread_environment.ThreadEnvironment(lambda: env_load_fn(
@@ -164,6 +165,7 @@ def create_environment(env_name='CartPole-v0',
                 model.load_state_dict(torch.load(model_path))
                 model.cpu()
                 model.eval()
+                model = None
                 return model
             model =_load_model(model_path)
             alf_env = parallel_environment.ParallelAlfEnvironment(

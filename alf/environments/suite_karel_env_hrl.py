@@ -37,22 +37,33 @@ class KarelEnvWrapper(gym.Wrapper):
         self.action_space = Box(low=np.array([-2] * 10), high = np.array([2] * 10))
 
     def step(self, action):
-        action_plan = self.generate_action_plan(np.expand_dims(action, 0))
+        #action_plan = self.generate_action_plan(np.expand_dims(action, 0))
+        #done = False
+        #while len(action_plan) > 0 and not done:
+        #    env_action = action_plan.pop(0)
+        #    ob, reward, done, info = self.env.step(env_action)
+        #    accumulated_reward += reward
+        #return self.observation(ob.astype(np.float32)), float(reward), done, {}
+        action = action.astype(np.int)
         accumulated_reward = 0
-        done = False
-        while len(action_plan) > 0 and not done:
-            env_action = action_plan.pop(0)
-            ob, reward, done, info = self.env.step(env_action)
-            accumulated_reward += reward
-        return self.observation(ob.astype(np.float32)), float(reward), done, {}
+        for i, a_t in enumerate(action):
+            if i == 0 and a_t == 5:
+                a_t = 0
+            if a_t != 5: # skip no-op actions 
+                ob, reward, done, _ = self.env.step(a_t)
+                accumulated_reward += reward
+                if done:
+                    break
+            else:
+                break
+        return self.observation(ob.astype(np.float32)), np.float(accumulated_reward), done, {}
 
     def generate_action_plan(self, z):
         if isinstance(z, np.ndarray) and np.all(z == 0):
             return [0]
         with torch.no_grad():
-            z = torch.from_numpy(z)
-            print(z.device)
-            print(self.model.device)
+            z = torch.tensor(z)
+            print(z.shape)
             action_plan = self.model.decode(z, z, self.model.n_rollout_steps)[0]
             action_plan = action_plan.cpu().detach().tolist()
         return action_plan

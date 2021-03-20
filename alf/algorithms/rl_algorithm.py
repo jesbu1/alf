@@ -24,6 +24,9 @@ import gin
 
 import alf
 from alf.algorithms.algorithm import Algorithm
+from spirl.models.prl_bc_mdl import BCMdl
+from alf.environments.suite_karel_env import AttrDict
+import numpy as np
 from alf.data_structures import AlgStep, Experience, make_experience, TimeStep
 from alf.utils import common, dist_utils, summary_utils, math_ops
 from .config import TrainerConfig
@@ -81,7 +84,8 @@ class RLAlgorithm(Algorithm):
                  optimizer=None,
                  debug_summaries=False,
                  name="RLAlgorithm",
-                 detach_action=False):
+                 detach_action=False,
+                 model=None):
         """
         Args:
             observation_spec (nested TensorSpec): representing the observations.
@@ -163,6 +167,8 @@ class RLAlgorithm(Algorithm):
         self._original_rollout_step = self.rollout_step
         self.rollout_step = self._rollout_step
         self._detach_action = detach_action
+        if model:
+            self._model = self._load_model("/home/jesse/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth")
 
     def is_rl(self):
         """Always return True for RLAlgorithm."""
@@ -451,7 +457,11 @@ class RLAlgorithm(Algorithm):
                 action = policy_step.output
 
             t0 = time.time()
-            next_time_step = self._env.step(action)
+            if hasattr(self, "_model"):
+                next_time_step = self.hrl_step(action)
+                next_time_step = next_time_step._replace(prev_action=action)
+            else:
+                next_time_step = self._env.step(action)
             env_step_time += time.time() - t0
 
             self.observe_for_metrics(time_step.cpu())
@@ -525,3 +535,35 @@ class RLAlgorithm(Algorithm):
     def _train_iter_off_policy(self):
         """Implemented in ``OffPolicyAlgorithm``."""
         raise NotImplementedError()
+    
+    def _load_model(self, model_path):
+        ll_model_params = AttrDict(
+            state_dim=5,
+            action_dim=5,
+            kl_div_weight=1.0,
+            batch_size=128,
+            nz_enc=128,
+            nz_mid=128,
+            input_res=16,
+            n_lstm_layers=2,
+            #n_processing_layers=5,
+            nz_vae=10,
+            n_rollout_steps=20,
+            device='cuda'
+        )
+        model = BCMdl(ll_model_params)
+        model.load_state_dict(torch.load(model_path))
+        #model.cpu()
+        model.eval()
+        return model
+
+    def hrl_step(self, action):
+        action_plan = self.generate_action_plan(action)
+        next_time_step = self._env.step(action_plan)
+        return next_time_step
+    
+    def generate_action_plan(self, z):
+        with torch.no_grad():
+            action_plan = self._model.decode(z, z, self._model.n_rollout_steps)
+            action_plan = action_plan.cpu().detach()
+        return action_plan

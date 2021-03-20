@@ -58,7 +58,7 @@ def atomic(func):
 class RingBuffer(nn.Module):
     """Batched Ring Buffer.
 
-    Multiprocessing safe, optionally via: ``allow_multiprocess`` flag, blocking
+    multiprocessing safe, optionally via: ``allow_multiprocess`` flag, blocking
     modes to ``enqueue`` and ``dequeue``, a stop event to terminate blocked
     processes, and putting buffer into shared memory.
 
