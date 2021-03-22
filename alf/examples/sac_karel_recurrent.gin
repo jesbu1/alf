@@ -64,7 +64,7 @@ TrainerConfig.summary_interval=15
 TrainerConfig.epsilon_greedy=0.
 TrainerConfig.num_checkpoints=1
 TrainerConfig.num_eval_episodes=20
-TrainerConfig.replay_buffer_length=1000000
+TrainerConfig.replay_buffer_length=100000
 
 
 ReplayBuffer.enable_checkpoint=True

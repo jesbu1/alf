@@ -89,6 +89,7 @@ class KarelGymEnv(gym.Env):
         elif mode == 'state':
             return self._world.get_perception_vector() if self.config.obv_type == 'local' else self._world.s
         else:
+            print(mode)
             raise NotImplementedError('render mode not found')
 
     def _set_bad_transition(self, done, info):
