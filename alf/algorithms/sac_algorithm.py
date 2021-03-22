@@ -242,7 +242,6 @@ class SacAlgorithm(OffPolicyAlgorithm):
             critic_network_cls, q_network_cls)
 
         self._use_entropy_reward = use_entropy_reward
-
         if reward_dim > 1:
             assert not use_entropy_reward, (
                 "use_entropy_reward=True is not supported for multidimensional reward"
@@ -291,7 +290,6 @@ class SacAlgorithm(OffPolicyAlgorithm):
             config=config,
             debug_summaries=debug_summaries,
             name=name)
-
         if actor_optimizer is not None:
             self.add_optimizer(actor_optimizer, [actor_network])
         if critic_optimizer is not None:
@@ -434,6 +432,9 @@ class SacAlgorithm(OffPolicyAlgorithm):
                 q_network = q_network_cls(
                     input_tensor_spec=observation_spec,
                     action_spec=action_spec)
+            actor_network = continuous_actor_network_cls(
+                input_tensor_spec=observation_spec,
+                action_spec=discrete_action_spec)
             critic_networks = _make_parallel(q_network)
 
         return critic_networks, actor_network, act_type, reward_dim
@@ -517,6 +518,8 @@ class SacAlgorithm(OffPolicyAlgorithm):
             state=state.action,
             epsilon_greedy=epsilon_greedy,
             eps_greedy_sampling=True)
+        if hasattr(self, "_model"): # hrl evaluation
+            action = self.generate_action_plan(action)
         return AlgStep(
             output=action,
             state=SacState(action=action_state),

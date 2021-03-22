@@ -84,7 +84,6 @@ class QNetwork(Network):
 
         num_actions = action_spec.maximum - action_spec.minimum + 1
         self._output_spec = TensorSpec((num_actions, ))
-
         self._encoding_net = EncodingNetwork(
             input_tensor_spec=input_tensor_spec,
             input_preprocessors=input_preprocessors,

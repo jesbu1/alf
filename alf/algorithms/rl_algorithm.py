@@ -552,7 +552,7 @@ class RLAlgorithm(Algorithm):
             device='cuda'
         )
         model = BCMdl(ll_model_params)
-        model.load_state_dict(torch.load(model_path))
+        model.load_state_dict(torch.load(model_path)['state_dict'])
         #model.cpu()
         model.eval()
         return model

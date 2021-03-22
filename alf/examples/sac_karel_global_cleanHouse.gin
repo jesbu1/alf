@@ -1,0 +1,73 @@
+#include 'ppo.gin'
+import alf.algorithms.agent
+
+import alf.algorithms.agent
+import alf.algorithms.sac_algorithm
+
+TrainerConfig.algorithm_ctor=@Agent
+TrainerConfig.whole_replay_buffer_training=False
+TrainerConfig.clear_replay_buffer=False
+
+Agent.rl_algorithm_cls=@SacAlgorithm
+
+observation_spec=@get_observation_spec()
+action_spec=@get_action_spec()
+
+import alf.environments.suite_karel_env
+
+# environment config
+create_environment.env_name="Karel"
+create_environment.num_parallel_environments=10
+create_environment.env_load_fn=@suite_karel_env.load
+create_environment.prl_load_model=False
+
+suite_karel_env.load.task_definition="custom_reward"
+suite_karel_env.load.width=22
+suite_karel_env.load.height=14
+suite_karel_env.load.env_task="cleanHouse"
+suite_karel_env.load.max_episode_steps=300
+suite_karel_env.load.obv_type="global"
+suite_karel_env.load.wall_prob=0.25
+suite_karel_env.load.incorrect_marker_penalty=True
+suite_karel_env.load.delayed_reward=True
+
+CONV_LAYER_PARAMS=((32, 2, 1), (32, 4, 1))
+# algorithm config
+
+actor/ActorDistributionNetwork.input_tensor_spec=%observation_spec
+actor/ActorDistributionNetwork.action_spec=%action_spec
+actor/ActorDistributionNetwork.fc_layer_params=(100,)
+actor/ActorDistributionNetwork.conv_layer_params=%CONV_LAYER_PARAMS
+actor/ActorDistributionNetwork.discrete_projection_net_ctor=@CategoricalProjectionNetwork 
+
+critic/QNetwork.conv_layer_params=%CONV_LAYER_PARAMS
+critic/QNetwork.input_tensor_spec=%observation_spec
+critic/QNetwork.action_spec=%action_spec
+critic/QNetwork.fc_layer_params=(100,)
+
+SacAlgorithm.actor_optimizer=@actor/Adam()
+SacAlgorithm.critic_optimizer=@critic/Adam()
+SacAlgorithm.alpha_optimizer=@alpha/Adam()
+SacAlgorithm.actor_network_cls=@actor/ActorDistributionNetwork
+SacAlgorithm.q_network_cls=@critic/QNetwork
+SacAlgorithm.target_update_tau=0.005
+OneStepTDLoss.td_error_loss_fn=@losses.element_wise_squared_loss
+
+# training config
+TrainerConfig.mini_batch_length=2
+TrainerConfig.unroll_length=8
+TrainerConfig.mini_batch_size=128
+TrainerConfig.num_updates_per_train_iter=8
+TrainerConfig.num_iterations=0
+TrainerConfig.num_env_steps=1000000
+TrainerConfig.evaluate=True
+TrainerConfig.eval_interval=100
+TrainerConfig.debug_summaries=False
+TrainerConfig.summary_interval=15
+TrainerConfig.epsilon_greedy=0.
+TrainerConfig.num_checkpoints=1
+TrainerConfig.num_eval_episodes=20
+TrainerConfig.replay_buffer_length=1000000
+
+
+ReplayBuffer.enable_checkpoint=True
