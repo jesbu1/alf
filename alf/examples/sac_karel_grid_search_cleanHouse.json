@@ -7,18 +7,16 @@
     2,
     3
   ],
-  "max_worker_num": 20,
+  "max_worker_num": 8,
   "repeats": 5,
   "parameters": {
     "suite_karel_env_hrl.load.env_task": [
       "'cleanHouse'"
     ],
     "TrainerConfig.num_updates_per_train_iter": [
-      1,
-      8
+      1
     ],
     "SacAlgorithm.target_update_tau": [
-      0.05,
       0.1
     ]
   }

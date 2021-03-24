@@ -82,4 +82,3 @@ TrainerConfig.num_eval_episodes=20
 TrainerConfig.replay_buffer_length=1000000
 
 
-ReplayBuffer.enable_checkpoint=True
