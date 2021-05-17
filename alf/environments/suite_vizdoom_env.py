@@ -36,6 +36,7 @@ class VizDoomEnvWrapper(gym.Wrapper):
     def step(self, action):
         ob, reward, done, info = self.env.step(action)
         self.accumulated_reward += reward
+        print(action, reward)
         return self.observation(ob.astype(np.float32)), float(self.accumulated_reward) if done else float(0), done, {}
 
     def reset(self):
@@ -57,7 +58,7 @@ def load(env_name,
          gym_env_wrappers=(),
          alf_env_wrappers=(),
          task_definition='custom_reward',
-         env_task='survive',
+         env_task='preloaded',
          vizdoom_config_file='vizdoom_env/asset/default.cfg',
          obv_type='local',
          delayed_reward=False,
