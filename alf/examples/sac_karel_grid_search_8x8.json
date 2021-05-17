@@ -7,7 +7,7 @@
     2,
     3
   ],
-  "max_worker_num": 20,
+  "max_worker_num": 16,
   "repeats": 5,
   "parameters": {
     "suite_karel_env_hrl.load.env_task": [
