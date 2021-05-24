@@ -106,7 +106,6 @@ class ActorCriticAlgorithm(OnPolicyAlgorithm):
         """Predict for one step."""
         action_dist, actor_state = self._actor_network(
             time_step.observation, state=state.actor)
-
         action = dist_utils.epsilon_greedy_sample(action_dist, epsilon_greedy)
         return AlgStep(
             output=action,

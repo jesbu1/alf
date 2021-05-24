@@ -9,7 +9,9 @@ import alf.algorithms.agent
 #
 #observation_spec=@get_observation_spec()
 #action_spec=@get_action_spec()
-RLAlgorithm.model=True
+#RLAlgorithm.model=True
+#RLAlgorithm.model="/home/jesse/beta_1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
+RLAlgorithm.model="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_1.0/weights/weights_ep70.pth"
 import alf.algorithms.agent
 import alf.algorithms.sac_algorithm
 
@@ -29,14 +31,13 @@ create_environment.env_name="Karel"
 create_environment.num_parallel_environments=1
 create_environment.env_load_fn=@suite_karel_env_hrl.load
 create_environment.prl_load_model=True
-#create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
-create_environment.model_path="/home/jesse/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
+create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_1.0/weights/weights_ep70.pth"
 create_environment.n_rollout_steps=20
 
 suite_karel_env_hrl.load.task_definition="custom_reward"
 suite_karel_env_hrl.load.width=12
 suite_karel_env_hrl.load.height=12
-suite_karel_env_hrl.load.env_task="chainSmoker"
+suite_karel_env_hrl.load.env_task="stairClimber_sparse"
 suite_karel_env_hrl.load.max_episode_steps=100
 suite_karel_env_hrl.load.obv_type="local"
 suite_karel_env_hrl.load.wall_prob=0.25

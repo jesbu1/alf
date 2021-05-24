@@ -7,6 +7,8 @@ from alf.environments.vizdoom_env.vizdoom_gym_env_wrapper import VizDoomGymEnv
 import gin
 import numpy as np
 import gym
+import cv2
+import collections
 from gym.spaces import Box
 
 class AttrDict(dict):
@@ -14,39 +16,64 @@ class AttrDict(dict):
         super(AttrDict, self).__init__(*args, **kwargs)
         self.__dict__ = self
 
+class StackFrames(gym.ObservationWrapper):
+  #init the new obs space (gym.spaces.Box) low & high bounds as repeat of n_steps. These should have been defined for vizdooom
+  
+  #Create a return a stack of observations
+    def __init__(self, env, repeat):
+        super(StackFrames, self).__init__(env)
+        self.observation_space = gym.spaces.Box( env.observation_space.low.repeat(repeat, axis=0),
+                              env.observation_space.high.repeat(repeat, axis=0),
+                            dtype=np.float32)
+        self.stack = collections.deque(maxlen=repeat)
+    def reset(self):
+        self.stack.clear()
+        observation = self.env.reset()
+        for _ in range(self.stack.maxlen):
+            self.stack.append(observation)
+        return  np.array(self.stack).reshape(self.observation_space.low.shape)
+    def observation(self, observation):
+        self.stack.append(observation)
+        return np.array(self.stack).reshape(self.observation_space.low.shape)
+
 class VizDoomEnvWrapper(gym.Wrapper):
-    def __init__(self, env=None, op=[2, 0, 1]):
+    def __init__(self, env=None, shape=[64, 48, 1]):
         """
         Transpose observation space for images
         """
         gym.Wrapper.__init__(self, env)
-        assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
-        self.op = op
         obs_shape = self.observation_space.shape
+        #self.shape = (shape[2], shape[0], shape[1])
+        self.shape = (shape[0], shape[1], shape[2])
         if len(obs_shape) == 3:
-            self.observation_space = Box(
-                self.observation_space.low[0, 0, 0],
-                self.observation_space.high[0, 0, 0], [
-                    obs_shape[self.op[0]], obs_shape[self.op[1]],
-                    obs_shape[self.op[2]]
-                ],
-                dtype=self.observation_space.dtype)
+            self.observation_space = Box(low=0.0, high=1.0,
+                                        shape=self.shape, dtype=np.float32)
         self.accumulated_reward = 0
 
     def step(self, action):
         ob, reward, done, info = self.env.step(action)
         self.accumulated_reward += reward
         return self.observation(ob.astype(np.float32)), float(self.accumulated_reward) if done else float(0), done, {}
+        #return self.observation(ob.astype(np.float32)), reward, done, {}
 
     def reset(self):
         ob = self.observation(np.array(self.env.reset(), dtype=np.float32))
         self.accumulated_reward = 0
         return ob
 
-    def observation(self, ob):
+    def observation(self, obs):
         if len(self.observation_space.shape) == 3:
-            return np.transpose(ob, (self.op[0], self.op[1], self.op[2]))
-        return ob
+            #set observation space to new shape using gym.spaces.Box (0 to 1.0)
+            new_frame = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)
+
+            resized_screen = cv2.resize(new_frame, self.shape[0:2],
+            #resized_screen = cv2.resize(new_frame, self.shape[1:],
+                                        interpolation=cv2.INTER_AREA)
+            new_obs = np.array(resized_screen, dtype=np.uint8).reshape(self.shape)
+            new_obs = new_obs / 255.0
+        else:
+            new_obs = obs
+        return new_obs
 
 
 @gin.configurable
@@ -57,7 +84,7 @@ def load(env_name,
          gym_env_wrappers=(),
          alf_env_wrappers=(),
          task_definition='custom_reward',
-         env_task='preloaded',
+         env_task='survive',
          vizdoom_config_file='vizdoom_env/asset/default.cfg',
          obv_type='local',
          delayed_reward=False,
@@ -79,35 +106,6 @@ def load(env_name,
         An AlfEnvironment instance.
     """
     _unwrapped_env_checker_.check_and_update(wrap_with_process)
-    #parser.add_argument(
-    #    '--seed', type=int, default=1, help='random seed (default: 1)')
-    #parser.add_argument('--task_definition',
-    #                    default='custom_reward',
-    #                    choices=['program', 'custom_reward'])
-    #parser.add_argument('--env_task',
-    #                    default='fourCorners',
-    #                    choices=['fourCorners', 'fourCorners_sparse', 'maze', 'maze_sparse', 'randomMaze',
-    #                             'randomMaze_sparse'])
-    #parser.add_argument('--max_episode_steps',
-    #                    type=int,
-    #                    default=100,
-    #                    help='set done=True for environment after max_episode_steps (to reset environment)')
-    #parser.add_argument('--obv_type',
-    #                    default='global',
-    #                    choices=['local', 'global'])
-    #parser.add_argument('--wall_prob',
-    #                    type=float,
-    #                    default=0.25,
-    #                    help='wall probability')
-    #parser.add_argument('--height',
-    #                    type=int,
-    #                    default=6,
-    #                    help='height of karel maze')
-    #parser.add_argument('--width',
-    #                    type=int,
-    #                    default=6,
-    #                    help='width of karel maze')
-
 
     def env_ctor(env_id=None):
         return suite_gym.wrap_env(
@@ -131,7 +129,8 @@ def load(env_name,
     env = VizDoomGymEnv(config)
     env._max_episode_steps = config.max_episode_steps
     env = VizDoomEnvWrapper(env)
-    print(env.action_space)
+    #if obv_type == 'global':
+    #    env = StackFrames(env, 4)
     #env.reset()
     #env = ActionScalingWrapper(env)
 

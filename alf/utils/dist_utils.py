@@ -537,7 +537,6 @@ def epsilon_greedy_sample(nested_distributions, eps=0.1):
         greedy_mask = torch.rand(sample_action.shape[0]) > eps
         sample_action[greedy_mask] = greedy_action[greedy_mask]
         return sample_action
-
     if eps >= 1.0:
         return sample_action_distribution(nested_distributions)
     else:
