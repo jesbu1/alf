@@ -1,0 +1,41 @@
+{
+  "desc": "Grid Search Example For DDPG",
+  "use_gpu": true,
+  "gpus": [
+    0,
+    1,
+    2,
+    3
+  ],
+  "max_worker_num": 12,
+  "repeats": 1,
+  "parameters": {
+    "suite_vizdoom_env.load.vizdoom_config_file": [
+      "'vizdoom_env/asset/scenarios/deadly_corridor.cfg'",
+      "'vizdoom_env/asset/default.cfg'",
+      "'vizdoom_env/asset/scenarios/deathmatch.cfg'",
+      "'vizdoom_env/asset/scenarios/defend_the_center.cfg'",
+      "'vizdoom_env/asset/scenarios/defend_the_line.cfg'",
+      "'vizdoom_env/asset/scenarios/health_gathering.cfg'",
+      "'vizdoom_env/asset/scenarios/health_gathering_supreme.cfg'",
+      "'vizdoom_env/asset/scenarios/my_way_home.cfg'",
+      "'vizdoom_env/asset/scenarios/multi_duel.cfg'",
+      "'vizdoom_env/asset/scenarios/rocket_basic.cfg'",
+      "'vizdoom_env/asset/scenarios/simpler_basic.cfg'",
+      "'vizdoom_env/asset/scenarios/predict_position.cfg'",
+      "'vizdoom_env/asset/scenarios/take_cover.cfg'"
+    ],
+    "PPOLoss.importance_ratio_clipping": [
+      0.1
+    ],
+    "PPOLoss.normalize_advantages": [
+      "True"
+    ],
+    "PPOLoss.entropy_regularization": [
+      1e-2
+    ],
+    "TrainerConfig.num_updates_per_train_iter": [
+      8
+    ]
+  }
+}
