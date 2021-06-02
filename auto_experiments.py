@@ -10,18 +10,25 @@ import time
 import sys
 which_gpus = [0, 1, 2, 3]
 max_worker_num = len(which_gpus) * 2
-COMMANDS = [
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel.gin --root_dir ~/karel_rl_logs/0000r0+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=1",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel.gin --root_dir ~/karel_rl_logs/0000r1+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=2",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel.gin --root_dir ~/karel_rl_logs/0000r2+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=3",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel.gin --root_dir ~/karel_rl_logs/0000r3+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=4",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel.gin --root_dir ~/karel_rl_logs/0000r4+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=5",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_large_maze.gin --root_dir ~/karel_rl_logs/0000r0+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=1",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_large_maze.gin --root_dir ~/karel_rl_logs/0000r1+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=2",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_large_maze.gin --root_dir ~/karel_rl_logs/0000r2+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=3",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_large_maze.gin --root_dir ~/karel_rl_logs/0000r3+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=4",
-    "python3 -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_large_maze.gin --root_dir ~/karel_rl_logs/0000r4+suite_karel_env.load.env_task='randomMaze'+local_maze_transfer=5",
+
+BASE_COMMAND = "python -m alf.bin.train "
+COMMANDS = []
+environments = [
+    #"harvester_0.25",
+    #"harvester_0.50",
+    #"harvester_0.75",
+    #"topOff",
+    #"cleanHouse",
+    "fourCorners"
+    #"stairClimber",
+    #"randomMaze"
 ]
+#for alg_type in ["global", "recurrent"]:
+for alg_type in ["recurrent"]:
+    for environment in environments:
+        for repeat in range(5):
+                COMMANDS.append(f"python -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_{alg_type}_{environment}.gin --root_dir ~/karel_rl_logs/best_param_{alg_type}_{environment}/{environment}_{repeat}")
+                print(COMMANDS[-1])
 def _init_device_queue(max_worker_num):
     m = Manager()
     device_queue = m.Queue()

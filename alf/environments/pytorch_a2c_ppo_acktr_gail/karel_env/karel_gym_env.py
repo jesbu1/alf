@@ -27,7 +27,9 @@ class KarelGymEnv(gym.Env):
         self._world = Karel_world(s=None, make_error=False, env_task=config.env_task,
                                    task_definition=config.task_definition, reward_diff=False,
                                    final_reward_scale=False,
-                                   incorrect_marker_penalty=self.config.incorrect_marker_penalty)
+                                   incorrect_marker_penalty=self.config.incorrect_marker_penalty,
+                                   perception_noise_prob=self.config.perception_noise_prob)
+        self._world.set_task_metadata(config.env_task, config.env_task_metadata)
         new_state, metadata = self._generate_state()
         self._world.set_new_state(new_state, metadata)
 
@@ -89,7 +91,6 @@ class KarelGymEnv(gym.Env):
         elif mode == 'state':
             return self._world.get_perception_vector() if self.config.obv_type == 'local' else self._world.s
         else:
-            print(mode)
             raise NotImplementedError('render mode not found')
 
     def _set_bad_transition(self, done, info):
@@ -104,28 +105,29 @@ class KarelGymEnv(gym.Env):
         h = self.config.height
         w = self.config.width
         wall_prob = self.config.wall_prob
+        env_task_metadata = self.config.env_task_metadata
         if self.config.env_task == 'program':
-            s, _, _, _, metadata = self.s_gen.generate_single_state(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'cleanHouse' or self.config.env_task == 'cleanHouse_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_clean_house(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_clean_house(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'harvester' or self.config.env_task == 'harvester_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_harvester(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_harvester(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'fourCorners' or self.config.env_task == 'fourCorners_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_four_corners(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_four_corners(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'maze' or self.config.env_task == 'maze_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_find_marker(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_find_marker(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'randomMaze' or self.config.env_task == 'randomMaze_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_random_maze(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_random_maze(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'stairClimber' or self.config.env_task == 'stairClimber_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_stair_climber(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_stair_climber(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'placeSetter' or self.config.env_task == 'placeSetter_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_place_setter(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_place_setter(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'shelfStocker' or self.config.env_task == 'shelfStocker_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_shelf_stocker(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_shelf_stocker(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'chainSmoker' or self.config.env_task == 'chainSmoker_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_chain_smoker(h, w, wall_prob)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_chain_smoker(h, w, wall_prob, env_task_metadata)
         elif self.config.env_task == 'topOff' or self.config.env_task == 'topOff_sparse':
-            s, _, _, _, metadata = self.s_gen.generate_single_state_chain_smoker(h, w, wall_prob, is_top_off=True)
+            s, _, _, _, metadata = self.s_gen.generate_single_state_chain_smoker(h, w, wall_prob, env_task_metadata, is_top_off=True)
         else:
             raise NotImplementedError('{} task not implemented yet'.format(self.config.env_task))
 
@@ -169,6 +171,14 @@ if __name__ == '__main__':
                         type=bool,
                         default=True,
                         help='whether to delay reward')
+    parser.add_argument('--env_task_metadata',
+                        type=dict,
+                        default={},
+                        help='metadata dict for karel generator and karel environment')
+    parser.add_argument('--perception_noise_prob',
+                        type=float,
+                        default=0.0,
+                        help='noise probability in perception vector')
 
     args = parser.parse_args()
 

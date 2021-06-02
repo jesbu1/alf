@@ -35,7 +35,8 @@ action_table = {
 
 class Karel_world(object):
 
-    def __init__(self, s=None, make_error=True, env_task="program", task_definition='program' ,reward_diff=False, final_reward_scale=True, incorrect_marker_penalty=True):
+    def __init__(self, s=None, make_error=True, env_task="program", task_definition='program' ,reward_diff=False,
+                 final_reward_scale=True, incorrect_marker_penalty=True, perception_noise_prob=0.0):
         if s is not None:
             self.set_new_state(s)
         self.make_error = make_error
@@ -46,6 +47,7 @@ class Karel_world(object):
         self.reward_diff = reward_diff
         self.num_actions = len(action_table)
         self.incorrect_marker_penalty=incorrect_marker_penalty
+        self.perception_noise_prob = perception_noise_prob
 
     def set_new_state(self, s, metadata=None):
         self.perception_count = 0
@@ -88,6 +90,7 @@ class Karel_world(object):
         self.s_h.append(self.s.copy())
         self.a_h.append(a_idx)
         p_v = self.get_perception_vector()
+        p_v = self._add_perception_vector_noise(p_v)
         self.p_v_h.append(p_v.copy())
 
         if self.task_definition != "program":
@@ -100,6 +103,16 @@ class Karel_world(object):
         if self.task_definition != 'program' and not made_error:
             if a_idx == 3: self.total_markers -= 1
             if a_idx == 4: self.total_markers += 1
+
+    def set_task_metadata(self, env_task, metadata):
+        self.task_metadata = metadata
+        assert self.env_task == env_task
+
+    def _add_perception_vector_noise(self, vec):
+        if self.perception_noise_prob > 0 and np.random.rand(1) > 1-self.perception_noise_prob:
+            idx = np.random.choice(range(len(vec)))
+            vec[idx] = not vec[idx]
+        return vec
 
     def _get_cleanHouse_task_reward(self, agent_pos):
         done = False
@@ -126,7 +139,8 @@ class Karel_world(object):
         h = self.h
         state = self.s_h[-1]
 
-        max_markers = (w-2)*(h-2)
+        markers_prob = self.task_metadata.get('marker_prob', 1.0)
+        max_markers = int(markers_prob * (w-2)*(h-2))
         reward = ( max_markers - self.total_markers ) / max_markers
         done = reward == 1
 
@@ -283,7 +297,6 @@ class Karel_world(object):
         return reward, done
 
     def _get_placeSetter_task_reward2(self, agent_pos):
-        assert self.reward_diff
         done = False
         reward = 0
         state = self.s_h[-1]
@@ -489,7 +502,6 @@ class Karel_world(object):
 
 
     def _get_chainSmoker_task_reward2(self, agent_pos):
-        assert self.reward_diff
         done = False
         reward = 0
         state = self.s_h[-1]
@@ -569,7 +581,6 @@ class Karel_world(object):
         return reward, done
 
     def _get_topOff_task_reward2(self, agent_pos):
-        assert self.reward_diff
         done = False
         reward = 0
         state = self.s_h[-1]
@@ -614,7 +625,6 @@ class Karel_world(object):
 
 
     def _get_topOff_task_reward3(self, agent_pos):
-        assert self.reward_diff
         done = False
         reward = 0
         state = self.s_h[-1]

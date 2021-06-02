@@ -48,7 +48,7 @@ Agent.optimizer=@ac/Adam()
 PPOLoss.entropy_regularization=1e-2
 PPOLoss.gamma=1.0
 PPOLoss.td_error_loss_fn=@element_wise_huber_loss
-PPOLoss.normalize_advantages=False
+PPOLoss.normalize_advantages=True
 PPOLoss.importance_ratio_clipping=0.1
 
 # training config

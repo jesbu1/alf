@@ -35,7 +35,7 @@ class KarelStateGenerator(object):
             print("".join(state_2d[i]))
 
     # generate an initial env
-    def generate_single_state(self, h=8, w=8, wall_prob=0.1):
+    def generate_single_state(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}):
         s = np.zeros([h, w, 16]) > 0
         # Wall
         s[:, :, 4] = self.rng.rand(h, w) > 1 - wall_prob
@@ -59,7 +59,7 @@ class KarelStateGenerator(object):
         return s, y, x, np.sum(s[:, :, 4]), np.sum(marker_weight*s[:, :, 5:])
 
     # generate an initial env for cleanHouse problem
-    def generate_single_state_clean_house(self, h=12, w=12, wall_prob=0.1, is_top_off=False):
+    def generate_single_state_clean_house(self, h=12, w=12, wall_prob=0.1, env_task_metadata={}, is_top_off=False):
         """
         initial state generator for cleanHouse problem
         Valid program for cleanHouse problem:
@@ -142,7 +142,7 @@ class KarelStateGenerator(object):
 
 
     # generate an initial env for fourCorners problem
-    def generate_single_state_harvester(self, h=8, w=8, wall_prob=0.1, is_top_off=False):
+    def generate_single_state_harvester(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}, is_top_off=False):
         """
         initial state generator for harvester problem
         Valid program for harvester problem:
@@ -153,6 +153,10 @@ class KarelStateGenerator(object):
         :param wall_prob:
         :return:
         """
+        mode = env_task_metadata.get("mode", "train")
+        marker_prob = env_task_metadata.get("marker_prob", 1.0)
+
+
         s = np.zeros([h, w, 16]) > 0
         # Wall
         s[0, :, 4] = True
@@ -165,14 +169,20 @@ class KarelStateGenerator(object):
         s[agent_pos[0], agent_pos[1], 1] = True
 
         # put 1 marker at every location in grid
-        s[1:h-1, 1:w-1, 6] = True
+        if marker_prob == 1.0:
+            s[1:h-1, 1:w-1, 6] = True
+        else:
+            valid_marker_pos = np.array([(r,c) for r in range(1,h-1) for c in range(1,w-1)])
+            marker_pos = valid_marker_pos[np.random.choice(len(valid_marker_pos), size=int(marker_prob*len(valid_marker_pos)), replace=False)]
+            for pos in marker_pos:
+                s[pos[0], pos[1], 6] = True
 
         metadata = {}
 
         return s, agent_pos[0], agent_pos[1], np.sum(s[:, :, 4]), metadata
 
     # generate an initial env for randomMaze problem
-    def generate_single_state_random_maze(self, h=8, w=8, wall_prob=0.1, is_top_off=False):
+    def generate_single_state_random_maze(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}, is_top_off=False):
         """
         initial state generator for random maze problem
         Valid program for random maze problem:
@@ -247,7 +257,7 @@ class KarelStateGenerator(object):
         return s, agent_pos[0], agent_pos[1], np.sum(s[:, :, 4]), metadata
 
     # generate an initial env for fourCorners problem
-    def generate_single_state_four_corners(self, h=8, w=8, wall_prob=0.1, is_top_off=False):
+    def generate_single_state_four_corners(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}, is_top_off=False):
         """
         initial state generator for four corners problem
         Valid program for four corners problem:
@@ -274,7 +284,7 @@ class KarelStateGenerator(object):
         return s, agent_pos[0], agent_pos[1], np.sum(s[:, :, 4]), metadata
 
     # generate an initial env
-    def generate_single_state_shelf_stocker(self, h=8, w=8, wall_prob=0.1):
+    def generate_single_state_shelf_stocker(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}):
         """
         initial state generator for shelf stocker
         valid programs:
@@ -342,7 +352,7 @@ class KarelStateGenerator(object):
         return s, agent_pos[0], agent_pos[1], np.sum(s[:, :, 4]), metadata
 
     # generate an initial env
-    def generate_single_state_chain_smoker(self, h=8, w=8, wall_prob=0.1, is_top_off=False):
+    def generate_single_state_chain_smoker(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}, is_top_off=False):
         """
         initial state generator for chain smoker and top off problem both
         Valid program for chain smoker problem:
@@ -366,6 +376,11 @@ class KarelStateGenerator(object):
         agent_pos = (h-2, 1)
         s[agent_pos[0], agent_pos[1], 1] = True
 
+        # randomly generate wall at h-3 row
+        mode = env_task_metadata.get('mode', 'train')
+        if mode == 'test':
+            s[h-3, 1:w-2, 4] = self.rng.rand(w-3) > 1 - max(wall_prob-0.1, 0.1)
+
         # randomly put markers at row h-2
         # self.print_state(s)
         s[h-2, 1:w-1, 6] = self.rng.rand(w-2) > 1 - wall_prob
@@ -387,7 +402,7 @@ class KarelStateGenerator(object):
         return s, agent_pos[0], agent_pos[1], np.sum(s[:, :, 4]), metadata
 
     # generate an initial env
-    def generate_single_state_place_setter(self, h=8, w=8, wall_prob=0.1):
+    def generate_single_state_place_setter(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}):
         """
         initial state generator for place setter problem
         Valid programs:
@@ -435,7 +450,7 @@ class KarelStateGenerator(object):
         return s, agent_pos[0], agent_pos[1], np.sum(s[:, :, 4]), metadata
 
     # generate an initial env
-    def generate_single_state_stair_climber(self, h=8, w=8, wall_prob=0.1):
+    def generate_single_state_stair_climber(self, h=8, w=8, wall_prob=0.1, env_task_metadata={}):
         s = np.zeros([h, w, 16]) > 0
         # Wall
         s[0, :, 4] = True
@@ -502,7 +517,7 @@ class KarelStateGenerator(object):
         metadata = {'agent_valid_positions': agent_valid_positions}
         return s, agent_pos[0], agent_pos[1], np.sum(s[:, :, 4]), metadata
 
-    def generate_single_state_find_marker(self, h=13, w=13, wall_prob=0.1):
+    def generate_single_state_find_marker(self, h=13, w=13, wall_prob=0.1, env_task_metadata={}):
         assert h == 13 and w == 13, 'karel maze environment should be 13 x 13, found {} x {}'.format(h, w)
         s = np.zeros([w, h, 16]) > 0
         # Wall

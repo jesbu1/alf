@@ -24,14 +24,14 @@ class KarelEnvWrapper(gym.Wrapper):
         assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
         self.op = op
         obs_shape = self.observation_space.shape
-        if len(obs_shape) == 3:
-            self.observation_space = Box(
-                self.observation_space.low[0, 0, 0],
-                self.observation_space.high[0, 0, 0], [
-                    obs_shape[self.op[0]], obs_shape[self.op[1]],
-                    obs_shape[self.op[2]]
-                ],
-                dtype=self.observation_space.dtype)
+        #if len(obs_shape) == 3:
+        #    self.observation_space = Box(
+        #        self.observation_space.low[0, 0, 0],
+        #        self.observation_space.high[0, 0, 0], [
+        #            obs_shape[self.op[0]], obs_shape[self.op[1]],
+        #            obs_shape[self.op[2]]
+        #        ],
+        #        dtype=self.observation_space.dtype)
 
     def step(self, action):
         ob, reward, done, info = self.env.step(action)
@@ -42,8 +42,8 @@ class KarelEnvWrapper(gym.Wrapper):
         return ob
 
     def observation(self, ob):
-        if len(self.observation_space.shape) == 3:
-            return np.transpose(ob, (self.op[0], self.op[1], self.op[2]))
+        #if len(self.observation_space.shape) == 3:
+        #    return np.transpose(ob, (self.op[0], self.op[1], self.op[2]))
         return ob
 
 
@@ -62,6 +62,9 @@ def load(env_name,
          wall_prob=0.25,
          incorrect_marker_penalty=True,
          delayed_reward=True,
+         mode="train",
+         marker_prob=1,
+         perception_noise_prob=0.0,
          wrap_with_process=False):
     """Loads the selected environment and wraps it with the specified wrappers.
     Note that by default a ``TimeLimit`` wrapper is used to limit episode lengths
@@ -109,7 +112,7 @@ def load(env_name,
     #                    default=6,
     #                    help='width of karel maze')
 
-
+    env_task_metadata = {"mode": mode, "marker_prob": marker_prob}
     def env_ctor(env_id=None):
         return suite_gym.wrap_env(
             env,
@@ -129,6 +132,8 @@ def load(env_name,
                   width=width,
                   incorrect_marker_penalty=incorrect_marker_penalty,
                   delayed_reward=delayed_reward,
+                  env_task_metadata=env_task_metadata,
+                  perception_noise_prob=perception_noise_prob,
                   seed=random.randint(0, 100000000))
     config = AttrDict()
     config.update(args) 

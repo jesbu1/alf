@@ -36,8 +36,11 @@ class VizDoomGymEnv(gym.Env):
         if config.obv_type == 'local':
             self.observation_space = spaces.Box(low=0, high=1, shape=self._world.get_perception_vector().shape, dtype=np.float32)
             self.initial_obv = self._world.get_perception_vector()
+        elif config.obv_type == 'global':
+            self.observation_space = spaces.Box(low=0, high=1, shape=self._world.s_h[-1].shape, dtype=np.float32)
+            self.initial_obv = self._world.s_h[-1]
         else:
-            assert 0
+            raise NotImplementedError('obv_type not found')
 
         self.num_actions = len(self._world.get_action_list())+1
         self.action_space = spaces.Discrete(self.num_actions)
@@ -109,7 +112,7 @@ if __name__ == '__main__':
     parser.add_argument(
         '--seed', type=int, default=123, help='random seed (default: 1)')
     parser.add_argument('--env_task',
-                        default='preloaded')
+                        default='survive')
     parser.add_argument('--vizdoom_config_file',
                         default='vizdoom_env/asset/default.cfg')
     parser.add_argument('--max_episode_steps',
@@ -149,7 +152,7 @@ if __name__ == '__main__':
         obs, reward, done, info = env.step(action)
         state = env._world.game.get_state()
         labels = state.labels if state is not None else None
-        print(action, env._world.action_strings[action], reward, done, labels)
+        print(action, env._world.action_strings[action] if action != len(env._world.action_strings) else "NONE", reward, done, labels)
         if done: break
         img = env.render(mode='rgb_array')
         state = env.render(mode='state')

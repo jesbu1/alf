@@ -34,18 +34,18 @@ DOOM_ARMOR = ['ArmorBonus', 'GreenArmor', 'BlueArmor']
 # ACTION, TAKING, POST NONE, When to capture [1, 2]
 FRAME_SKIP = {
     'NONE': [1, 1, 1],
-    'MOVE_FORWARD': [5, 30, 1],
-    'MOVE_BACKWARD': [5, 30, 1],
-    'MOVE_LEFT': [5, 30, 1],
-    'MOVE_RIGHT': [5, 30, 1],
-    'TURN_LEFT': [5, 5, 1],
-    'TURN_RIGHT': [5, 5, 1],
-    'ATTACK': [1, 40, 0],
-    'SELECT_WEAPON1': [40, 1, 1],
-    'SELECT_WEAPON2': [40, 1, 1],
-    'SELECT_WEAPON3': [40, 1, 1],
-    'SELECT_WEAPON4': [40, 1, 1],
-    'SELECT_WEAPON5': [40, 1, 1],
+    'MOVE_FORWARD': [5, 1, 1],
+    'MOVE_BACKWARD': [5, 1, 1],
+    'MOVE_LEFT': [5, 1, 1],
+    'MOVE_RIGHT': [5, 1, 1],
+    'TURN_LEFT': [5, 1, 1],
+    'TURN_RIGHT': [5, 1, 1],
+    'ATTACK': [1, 1, 0],
+    'SELECT_WEAPON1': [5, 1, 1],
+    'SELECT_WEAPON2': [5, 1, 1],
+    'SELECT_WEAPON3': [5, 1, 1],
+    'SELECT_WEAPON4': [5, 1, 1],
+    'SELECT_WEAPON5': [5, 1, 1],
 }
 
 ATTACK_FRAME_SKIP = {
@@ -108,6 +108,7 @@ class Vizdoom_env(object):
         p_v = self.get_perception_vector()
         self.s_h = [img_arr.copy()]
         self.a_h = []
+        self.a_h_str = []
         self.r_h = []
         self.d_h = []
         self.p_v_h = [p_v.copy()]  # perception vector
@@ -121,9 +122,9 @@ class Vizdoom_env(object):
     def state_transition(self, action_string):
         if action_string == 'NONE' or action_string in self.action_strings:
             r = self.take_action(action_string)
-            self.a_h.append(action_string)
-            self.r_h.append(self.get_state_reward(r))
-            self.d_h.append(self.game.is_player_dead() or self.game.is_episode_finished())
+            action_idx = len(self.action_strings) if action_string == 'NONE' else self.action_strings.index(action_string)
+            self.a_h.append(action_idx)
+            self.a_h_str.append(action_string)
             if self.verbose:
                 self.print_state()
             if FRAME_SKIP[action_string][2] == 0:
@@ -131,12 +132,14 @@ class Vizdoom_env(object):
                 self.s_h.append(self.screen.copy())
                 p_v = self.get_perception_vector()
                 self.p_v_h.append(p_v.copy())  # perception vector
-            self.post_none(action_string)
+            r_none = self.post_none(action_string)
             if FRAME_SKIP[action_string][2] == 1:
                 self.get_state()
                 self.s_h.append(self.screen.copy())
                 p_v = self.get_perception_vector()
                 self.p_v_h.append(p_v.copy())  # perception vector
+            self.r_h.append(self.get_state_reward(r+r_none))
+            self.d_h.append(self.game.is_player_dead() or self.game.is_episode_finished())
             if self.verbose:
                 self.call_all_perception_primitives()
         else:
@@ -170,7 +173,7 @@ class Vizdoom_env(object):
 
     def post_none(self, action):
         none_vector = [a == 'NONE' for a in self.action_strings]
-        self.game.make_action(none_vector, FRAME_SKIP[action][1])
+        return self.game.make_action(none_vector, FRAME_SKIP[action][1])
 
     def get_action_list(self):
         return self.action_strings
@@ -390,7 +393,10 @@ class Vizdoom_env(object):
 
     def get_state_reward(self, r=None):
         if self.env_task == 'survive':
-            return self.game.get_living_reward()
+            if self.game.is_player_dead():
+                return -100
+            else:
+                return self.game.get_living_reward()
         elif self.env_task == 'preloaded':
             return r
         else:

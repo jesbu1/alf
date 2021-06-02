@@ -40,7 +40,7 @@ class DoomStateGenerator(object):
 
     # generate an initial env
     def generate_initial_state(self, min_ammo=4, max_ammo=5,
-                               min_monster=4, max_monster=5):
+                               min_monster=2, max_monster=3):
         """ h is y, w is x
             s = [{"player_pos": [x, y], "monster_pos": [[x1, y1], [x2, y2]]}]
         """
