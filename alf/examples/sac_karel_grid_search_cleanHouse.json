@@ -2,8 +2,6 @@
   "desc": "Grid Search Example For DDPG",
   "use_gpu": true,
   "gpus": [
-    0,
-    1,
     2,
     3
   ],

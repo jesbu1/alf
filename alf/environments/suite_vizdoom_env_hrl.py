@@ -3,14 +3,16 @@ import random
 from alf.environments.utils import UnwrappedEnvChecker
 from alf.environments import suite_gym, alf_wrappers, process_environment
 _unwrapped_env_checker_ = UnwrappedEnvChecker()
+#from alf.environments.pytorch_a2c_ppo_acktr_gail.karel_env.karel_gym_env import KarelGymEnv
 from alf.environments.vizdoom_env.vizdoom_gym_env_wrapper import VizDoomGymEnv
+from spirl.models.prl_bc_mdl import BCMdl
 import gin
 import numpy as np
 import gym
-import cv2
-import collections
 from gym.spaces import Box
-
+import torch
+import cv2 
+import collections
 class AttrDict(dict):
     def __init__(self, *args, **kwargs):
         super(AttrDict, self).__init__(*args, **kwargs)
@@ -37,7 +39,7 @@ class StackFrames(gym.ObservationWrapper):
         return np.array(self.stack).reshape(self.observation_space.low.shape)
 
 class VizDoomEnvWrapper(gym.Wrapper):
-    def __init__(self, env=None, shape=[64, 48, 1]):
+    def __init__(self, env=None, shape=[64, 48, 1], model=None):
         """
         Transpose observation space for images
         """
@@ -49,12 +51,34 @@ class VizDoomEnvWrapper(gym.Wrapper):
             self.observation_space = Box(low=0.0, high=1.0,
                                         shape=self.shape, dtype=np.float32)
         self.accumulated_reward = 0
+        self.action_space = Box(low=np.array([-2] * 10), high = np.array([2] * 10))
 
     def step(self, action):
-        ob, reward, done, info = self.env.step(action)
-        self.accumulated_reward += reward
-        return self.observation(ob.astype(np.float32)), float(self.accumulated_reward) if done else float(0), done, {}
-        #return self.observation(ob.astype(np.float32)), reward, done, {}
+        action = action.astype(np.int)
+        accumulated_reward = 0
+        check_out_of_bounds = lambda x: x >= self.env.action_space.n
+        for i, a_t in enumerate(action):
+            
+            if i == 0 and check_out_of_bounds(a_t):
+                a_t = 0
+            if not check_out_of_bounds(a_t): # skip no-op actions 
+                ob, reward, done, _ = self.env.step(a_t)
+                accumulated_reward += reward
+                if done:
+                    break
+            else:
+                break
+        return self.observation(ob.astype(np.float32)), np.float(accumulated_reward), done, {}
+
+    def generate_action_plan(self, z):
+        if isinstance(z, np.ndarray) and np.all(z == 0):
+            return [0]
+        with torch.no_grad():
+            z = torch.tensor(z)
+            print(z.shape)
+            action_plan = self.model.decode(z, z, self.model.n_rollout_steps)[0]
+            action_plan = action_plan.cpu().detach().tolist()
+        return action_plan
 
     def reset(self):
         ob = self.observation(np.array(self.env.reset(), dtype=np.float32))
@@ -75,9 +99,9 @@ class VizDoomEnvWrapper(gym.Wrapper):
             new_obs = obs
         return new_obs
 
-
 @gin.configurable
 def load(env_name,
+         model,
          env_id=None,
          discount=1.0,
          max_episode_steps=100,
@@ -85,8 +109,8 @@ def load(env_name,
          alf_env_wrappers=(),
          task_definition='custom_reward',
          env_task='survive',
-         vizdoom_config_file='vizdoom_env/asset/default.cfg',
          obv_type='local',
+         vizdoom_config_file='vizdoom_env/asset/default.cfg',
          delayed_reward=False,
          wrap_with_process=False):
     """Loads the selected environment and wraps it with the specified wrappers.
@@ -106,6 +130,7 @@ def load(env_name,
         An AlfEnvironment instance.
     """
     _unwrapped_env_checker_.check_and_update(wrap_with_process)
+
 
     def env_ctor(env_id=None):
         return suite_gym.wrap_env(

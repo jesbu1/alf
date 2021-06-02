@@ -25,12 +25,15 @@ import gin
 import alf
 from alf.algorithms.algorithm import Algorithm
 from spirl.models.prl_bc_mdl import BCMdl
-from alf.environments.suite_karel_env import AttrDict
 import numpy as np
 from alf.data_structures import AlgStep, Experience, make_experience, TimeStep
 from alf.utils import common, dist_utils, summary_utils, math_ops
 from .config import TrainerConfig
 
+class AttrDict(dict):
+    def __init__(self, *args, **kwargs):
+        super(AttrDict, self).__init__(*args, **kwargs)
+        self.__dict__ = self
 
 @gin.configurable
 class RLAlgorithm(Algorithm):
@@ -168,7 +171,12 @@ class RLAlgorithm(Algorithm):
         self.rollout_step = self._rollout_step
         self._detach_action = detach_action
         if model:
-            self._model = self._load_model("/home/jesse/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth")
+            #self._model = self._load_model("/home/jesse/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth")
+            if isinstance(model, str):
+                self._model = self._load_model(model)
+            else:
+                #self._model = self._load_model("/home/jesse/beta_0.1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth")
+                self._model = self._load_model("/data/jesse/vizdoom_hrl_stage_1/skill_prior_learning/program/vizdoom_flat/beta_0.1/weights/weights_ep70.pth")
 
     def is_rl(self):
         """Always return True for RLAlgorithm."""
@@ -539,7 +547,8 @@ class RLAlgorithm(Algorithm):
     def _load_model(self, model_path):
         ll_model_params = AttrDict(
             state_dim=5,
-            action_dim=5,
+            action_dim=9,
+            #action_dim=5,
             kl_div_weight=1.0,
             batch_size=128,
             nz_enc=128,

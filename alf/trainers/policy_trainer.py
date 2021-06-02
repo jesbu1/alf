@@ -737,7 +737,6 @@ def play(root_dir,
         elif render:
             env.render(mode='human')
             time.sleep(sleep_time_per_step)
-
         time_step_reward = time_step.reward.view(-1).float().cpu().numpy()
 
         episode_reward += time_step_reward

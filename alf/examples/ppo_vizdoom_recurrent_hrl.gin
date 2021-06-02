@@ -10,8 +10,7 @@ import alf.algorithms.agent
 #observation_spec=@get_observation_spec()
 #action_spec=@get_action_spec()
 #RLAlgorithm.model=True
-#RLAlgorithm.model="/home/jesse/beta_1_2_lstm_layers_nz_vae_5_no_teacher/weights/weights_ep70.pth"
-RLAlgorithm.model="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_1.0/weights/weights_ep70.pth"
+RLAlgorithm.model="/data/jesse/vizdoom_hrl_stage_1/skill_prior_learning/program/vizdoom_flat/beta_2.0/weights/weights_ep70.pth"
 import alf.algorithms.agent
 import alf.algorithms.sac_algorithm
 
@@ -24,25 +23,24 @@ Agent.rl_algorithm_cls=@SacAlgorithm
 observation_spec=@get_observation_spec()
 action_spec=@get_action_spec()
 
-import alf.environments.suite_karel_env_hrl
+import alf.environments.suite_vizdoom_env_hrl
 
 # environment config
-create_environment.env_name="Karel"
+create_environment.env_name="VizDoom"
 create_environment.num_parallel_environments=1
-create_environment.env_load_fn=@suite_karel_env_hrl.load
-create_environment.prl_load_model=True
-create_environment.model_path="/data/jesse/program_prl_exps/skill_prior_learning/program/flat/beta_1.0/weights/weights_ep70.pth"
 create_environment.n_rollout_steps=20
+create_environment.env_load_fn=@suite_vizdoom_env_hrl.load
+create_environment.prl_load_model=True
+create_environment.model_path="/data/jesse/vizdoom_hrl_stage_1/skill_prior_learning/program/vizdoom_flat/beta_0.1/weights/weights_ep70.pth"
 
-suite_karel_env_hrl.load.task_definition="custom_reward"
-suite_karel_env_hrl.load.width=12
-suite_karel_env_hrl.load.height=12
-suite_karel_env_hrl.load.env_task="stairClimber_sparse"
-suite_karel_env_hrl.load.max_episode_steps=100
-suite_karel_env_hrl.load.obv_type="local"
-suite_karel_env_hrl.load.wall_prob=0.25
-suite_karel_env_hrl.load.incorrect_marker_penalty=True
-suite_karel_env_hrl.load.delayed_reward=True
+suite_vizdoom_env_hrl.load.task_definition="custom_reward"
+suite_vizdoom_env_hrl.load.max_episode_steps=100
+#suite_vizdoom_env_hrl.load.env_task="survive"
+#suite_vizdoom_env_hrl.load.vizdoom_config_file="vizdoom_env/asset/default.cfg"
+suite_vizdoom_env_hrl.load.env_task="preloaded"
+suite_vizdoom_env_hrl.load.vizdoom_config_file="vizdoom_env/asset/scenarios/defend_the_center.cfg"
+suite_vizdoom_env_hrl.load.obv_type="local"
+
 
 # algorithm config
 actor/ActorDistributionRNNNetwork.input_tensor_spec=%observation_spec
@@ -60,9 +58,8 @@ critic/CriticRNNNetwork.joint_fc_layer_params=(100,)
 SacAlgorithm.actor_optimizer=@actor/Adam()
 SacAlgorithm.critic_optimizer=@critic/Adam()
 SacAlgorithm.alpha_optimizer=@alpha/Adam()
-SacAlgorithm.actor_network_cls=@actor/ActorDistributionRNNNetwork
-SacAlgorithm.use_parallel_network=True
-SacAlgorithm.critic_network_cls=@critic/CriticRNNNetwork
+SacAlgorithm.actor_network_cls=@actor/ActorDistributionNetwork
+SacAlgorithm.critic_network_cls=@critic/CriticNetwork
 SacAlgorithm.target_update_tau=0.005
 OneStepTDLoss.td_error_loss_fn=@losses.element_wise_squared_loss
 
@@ -81,5 +78,3 @@ TrainerConfig.epsilon_greedy=0.
 TrainerConfig.num_checkpoints=1
 TrainerConfig.num_eval_episodes=20
 TrainerConfig.replay_buffer_length=1000000
-
-

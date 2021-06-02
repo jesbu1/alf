@@ -4,3 +4,6 @@
 [submodule "alf/environments/spirl"]
 	path = alf/environments/spirl
 	url = git@github.com:jesbu1/spirl.git
+[submodule "alf/environments/pytorch-a2c-ppo-acktr-gail"]
+	path = alf/environments/pytorch-a2c-ppo-acktr-gail
+	url = git@github.com:dweeptrivedi/pytorch-a2c-ppo-acktr-gail.git
