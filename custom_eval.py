@@ -15,32 +15,62 @@ import sys
 import pprint
 from filelock import FileLock
 which_gpus = [0, 1, 2, 3]
-max_worker_num = len(which_gpus) * 2
+max_worker_num = len(which_gpus) * 4
 #alg_type = sys.argv[1]
 #environment = sys.argv[2]
 #repeat = int(sys.argv[3])
 COMMANDS = []
+#filename = "../../custom_eval_data_each_perception_noise.json"
+filename = "../../custom_eval_data_action_noise.json"
 desired_changes= [
-    "suite_karel_env.load.perception_noise_prob=0.0",
-    "suite_karel_env.load.perception_noise_prob=0.25",
-    "suite_karel_env.load.perception_noise_prob=0.5",
-    "suite_karel_env.load.perception_noise_prob=0.75",
-    "suite_karel_env.load.perception_noise_prob=1.0",
+    #"suite_karel_env.load.perception_noise_prob=0.0",
+    #"suite_karel_env.load.perception_noise_prob=0.25",
+    #"suite_karel_env.load.perception_noise_prob=0.5",
+    #"suite_karel_env.load.perception_noise_prob=0.75",
+    #"suite_karel_env.load.perception_noise_prob=1.0",
+    #"suite_karel_env.load.action_noise_prob=0.0",
+    #"suite_karel_env.load.action_noise_prob=0.25",
+    #"suite_karel_env.load.action_noise_prob=0.5",
+    #"suite_karel_env.load.action_noise_prob=0.75",
+    #"suite_karel_env.load.action_noise_prob=1.0",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1",
+    #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.25",
+    #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.50",
+    #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.75",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75",
+    #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.1",
+    #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.25",
+    #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.50",
+    #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.75",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75",
+    "suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=1.0",
 ]
 environments = [
+    "harvester_0.05",
+    "harvester_0.1",
     #"harvester_0.25",
     #"harvester_0.50",
     #"harvester_0.75",
-    "topOff",
-    "cleanHouse",
-    "stairClimber",
-    "randomMaze",
-    "harvester",
-    "fourCorners",
+    "topOff_0.05",
+    #"topOff_0.1",
+    #"topOff_0.25",
+    #"topOff_0.50",
+    #"topOff_0.75",
+    #"topOff",
+    #"cleanHouse",
+    #"stairClimber",
+    #"randomMaze",
+    #"harvester",
+    #"fourCorners",
     
 ]
-#for alg_type in ["global", "recurrent"]:
-for alg_type in ["recurrent"]:
+for alg_type in ["global", "recurrent"]:
+#for alg_type in ["recurrent"]:
     for environment in environments:
         for desired_change in desired_changes:
             record_string = f"{alg_type}: {environment} {desired_change}"
@@ -124,7 +154,7 @@ def run():
         finalized_outputs[record_string].append(reward.get())
     for key, list_of_results in finalized_outputs.items():
         finalized_outputs[key] = f"{np.mean(list_of_results)} ({np.std(list_of_results)})"
-    with open('../../custom_eval_data.json', 'w') as fp:
+    with open(filename, 'w') as fp:
         json.dump(finalized_outputs, fp, sort_keys=True, indent=4)
 
 
@@ -147,24 +177,41 @@ def _worker(command, device_queue, config_file, desired_change):
             found_change = False
             old_lines = copy.deepcopy(lines)
             modified_lines = []
-            for line in lines:
-                if not found_change and desired_change.split("=")[0] in line:
-                    found_change = True
-                    old_value = line.split("=")[1].strip()
-                    line.replace(old_value, desired_change.split("=")[-1])
-                modified_lines.append(line)
-            if not found_change:
-                modified_lines.append("\n" + desired_change + "\n")
+            if len(desired_change.split(" "))==1:
+                for line in lines:
+                    if not found_change and desired_change.split("=")[0] in line:
+                        found_change = True
+                        old_value = line.split("=")[1].strip()
+                        line = line.replace(old_value, desired_change.split("=")[-1])
+                    modified_lines.append(line)
+                if not found_change:
+                    modified_lines.append("\n" + desired_change + "\n")
+            else:
+                desired_changes = desired_change.split(" ")
+                num_changes = 0
+                for line in lines:
+                    for desired_change in desired_changes:
+                        if num_changes < len(desired_changes) and desired_change.split("=")[0] in line:
+                            num_changes += 1
+                            old_value = line.split("=")[1].strip()
+                            line = line.replace(old_value, desired_change.split("=")[-1])
+                    modified_lines.append(line)
+                if num_changes < len(desired_changes):
+                    modified_lines.append("\n" + desired_change + "\n")
             with open(config_file, 'w') as f:
                 f.writelines(modified_lines)
-            cmd_output = os.popen("CUDA_VISIBLE_DEVICES=%d " % which_gpus[0] + command).readlines()
+            cmd_output = os.popen("CUDA_VISIBLE_DEVICES=%d " % device + command).readlines()
             with open(config_file, 'w') as f:
                 f.writelines(old_lines)
             for line in cmd_output:
                 if "AverageReturn" in line:
                     reward = float(line.strip().split(" ")[-1])
         device_queue.put(device)
-        return reward
+        #pprint.pprint(cmd_output)
+        try:
+            return reward
+        except UnboundLocalError:
+            print("ERRORERERER", command)
     except Exception as e:
         logging.info(traceback.format_exc())
         with open(config_file, 'w') as f:

@@ -65,6 +65,7 @@ def load(env_name,
          mode="train",
          marker_prob=1,
          perception_noise_prob=0.0,
+         action_noise_prob=0.0,
          wrap_with_process=False):
     """Loads the selected environment and wraps it with the specified wrappers.
     Note that by default a ``TimeLimit`` wrapper is used to limit episode lengths
@@ -112,7 +113,8 @@ def load(env_name,
     #                    default=6,
     #                    help='width of karel maze')
 
-    env_task_metadata = {"mode": mode, "marker_prob": marker_prob}
+    env_task_metadata = {"mode": mode, "marker_prob": marker_prob, "hash_info": 'pytorch-a2c-ppo-acktr-gail/tasks/run2_topOff_all_states_w_12.pkl', 'train_configs': marker_prob, 'test_configs': 1 - marker_prob}
+    print(env_task_metadata)
     def env_ctor(env_id=None):
         return suite_gym.wrap_env(
             env,
@@ -134,6 +136,7 @@ def load(env_name,
                   delayed_reward=delayed_reward,
                   env_task_metadata=env_task_metadata,
                   perception_noise_prob=perception_noise_prob,
+                  action_noise_prob=action_noise_prob,
                   seed=random.randint(0, 100000000))
     config = AttrDict()
     config.update(args) 
