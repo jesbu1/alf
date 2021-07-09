@@ -1,0 +1,22 @@
+{
+    "global: harvester_0.05 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.05": "0.9799999713897705 (0.014142138995488879) 18.389",
+    "global: harvester_0.1 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1": "0.17600000351667405 (0.14735293933677826) -78.738",
+    "global: harvester_0.25 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25": "0.5675555378198623 (0.17521399561298623) -31.436",
+    "global: harvester_0.50 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50": "0.7675555586814881 (0.12417561019123573) -7.275",
+    "global: harvester_0.75 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75": "0.7565926134586334 (0.13979005987754925) -8.600",
+    "global: topOff_0.05 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.05": "0.14290909320116044 (0.029381506221839937) -42.919",
+    "global: topOff_0.1 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1": "0.15472726970911027 (0.06161570548966826) -38.199",
+    "global: topOff_0.25 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25": "0.23054544776678085 (0.07340502275589557) -7.916",
+    "global: topOff_0.50 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50": "0.13399999737739562 (0.02243521127457475) -46.478",
+    "global: topOff_0.75 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75": "0.1323636367917061 (0.04688160294770987) -47.131",
+    "recurrent: harvester_0.05 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.05": "0.7379999816417694 (0.18519179384710518) 74.789",
+    "recurrent: harvester_0.1 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1": "0.32000000327825545 (0.3844187553673284) -24.211",
+    "recurrent: harvester_0.25 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25": "0.32355555817484855 (0.17489524171241305) -23.368",
+    "recurrent: harvester_0.50 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50": "0.18077778145670892 (0.1844312620922784) -57.184",
+    "recurrent: harvester_0.75 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75": "0.24392591938376426 (0.14783161659968194) -42.228",
+    "recurrent: topOff_0.05 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.05": "0.1649090901017189 (0.054103051457050785) 52.437",
+    "recurrent: topOff_0.1 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1": "0.17345454096794127 (0.07276907769593392) 60.336",
+    "recurrent: topOff_0.25 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25": "0.14509090334177016 (0.09285659036645783) 34.118",
+    "recurrent: topOff_0.50 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50": "0.14000000059604645 (0.016792362465234398) 29.412",
+    "recurrent: topOff_0.75 suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75": "0.10527273043990135 (0.0314151084415125) -2.689"
+}

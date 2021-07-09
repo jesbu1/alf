@@ -20,16 +20,14 @@ max_worker_num = len(which_gpus) * 4
 #environment = sys.argv[2]
 #repeat = int(sys.argv[3])
 COMMANDS = []
-#filename = "../../custom_eval_data_each_perception_noise.json"
-filename = "../../custom_eval_data_topOff_harvester_train_test.json"
-#filename = "../../custom_eval_data_action_noise.json"
+filename = "../../custom_eval_data_baseline_vals.json"
 desired_changes= [
     #"suite_karel_env.load.perception_noise_prob=0.0",
     #"suite_karel_env.load.perception_noise_prob=0.25",
     #"suite_karel_env.load.perception_noise_prob=0.5",
     #"suite_karel_env.load.perception_noise_prob=0.75",
     #"suite_karel_env.load.perception_noise_prob=1.0",
-    #"suite_karel_env.load.action_noise_prob=0.0",
+    "suite_karel_env.load.action_noise_prob=0.0",
     #"suite_karel_env.load.action_noise_prob=0.25",
     #"suite_karel_env.load.action_noise_prob=0.5",
     #"suite_karel_env.load.action_noise_prob=0.75",
@@ -45,31 +43,29 @@ desired_changes= [
     #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.25",
     #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.50",
     #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=0.75",
-    "suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.05",
-    "suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1",
-    "suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25",
-    "suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50",
-    "suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75",
-    "suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.95",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.1",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.25",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.50",
+    #"suite_karel_env.load.mode='test' suite_karel_env.load.marker_prob=0.75",
     #"suite_karel_env.load.mode='train' suite_karel_env.load.marker_prob=1.0",
 ]
 environments = [
-    "harvester_0.05",
-    "harvester_0.1",
-    "harvester_0.25",
-    "harvester_0.50",
-    "harvester_0.75",
-    "topOff_0.05",
-    "topOff_0.1",
-    "topOff_0.25",
-    "topOff_0.50",
-    "topOff_0.75",
-    #"topOff",
-    #"cleanHouse",
-    #"stairClimber",
-    #"randomMaze",
-    #"harvester",
-    #"fourCorners",
+    #"harvester_0.05",
+    #"harvester_0.1",
+    #"harvester_0.25",
+    #"harvester_0.50",
+    #"harvester_0.75",
+    #"topOff_0.05",
+    #"topOff_0.1",
+    #"topOff_0.25",
+    #"topOff_0.50",
+    #"topOff_0.75",
+    "topOff",
+    "cleanHouse",
+    "stairClimber",
+    "randomMaze",
+    "harvester",
+    "fourCorners",
 ]
 for alg_type in ["global", "recurrent"]:
 #for alg_type in ["recurrent"]:

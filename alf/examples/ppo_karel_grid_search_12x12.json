@@ -10,28 +10,26 @@
   "max_worker_num": 12,
   "repeats": 5,
   "parameters": {
-    "suite_karel_env_hrl.load.env_task": [
+    "suite_karel_env.load.env_task": [
       "'stairClimber_sparse'",
       "'fourCorners'",
       "'topOff'"
-    ],
-    "PPOLoss.importance_ratio_clipping": [
-      0.05,
-      0.1,
-      0.2
-    ],
-    "PPOLoss.normalize_advantages": [
-      "True"
     ],
     "PPOLoss.entropy_regularization": [
       1e-1,
       1e-2,
       1e-3
     ],
+    "PPOLoss.importance_ratio_clipping": [
+      0.1,
+      0.2,
+      0.3
+    ],
     "TrainerConfig.num_updates_per_train_iter": [
       25,
       50,
-      100
+      100,
+      200
     ]
   }
 }

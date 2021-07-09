@@ -24,14 +24,16 @@ class KarelEnvWrapper(gym.Wrapper):
         assert len(op) == 3, "Error: Operation, " + str(op) + ", must be dim3"
         self.op = op
         obs_shape = self.observation_space.shape
-        #if len(obs_shape) == 3:
-        #    self.observation_space = Box(
-        #        self.observation_space.low[0, 0, 0],
-        #        self.observation_space.high[0, 0, 0], [
-        #            obs_shape[self.op[0]], obs_shape[self.op[1]],
-        #            obs_shape[self.op[2]]
-        #        ],
-        #        dtype=self.observation_space.dtype)
+        #"""
+        if len(obs_shape) == 3:
+            self.observation_space = Box(
+                self.observation_space.low[0, 0, 0],
+                self.observation_space.high[0, 0, 0], [
+                    obs_shape[self.op[0]], obs_shape[self.op[1]],
+                    obs_shape[self.op[2]]
+                ],
+                dtype=self.observation_space.dtype)
+        #"""
 
     def step(self, action):
         ob, reward, done, info = self.env.step(action)
@@ -42,8 +44,10 @@ class KarelEnvWrapper(gym.Wrapper):
         return ob
 
     def observation(self, ob):
-        #if len(self.observation_space.shape) == 3:
-        #    return np.transpose(ob, (self.op[0], self.op[1], self.op[2]))
+        #""""
+        if len(self.observation_space.shape) == 3:
+            return np.transpose(ob, (self.op[0], self.op[1], self.op[2]))
+        #""""
         return ob
 
 

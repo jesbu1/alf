@@ -9,31 +9,35 @@ import traceback
 import time
 import sys
 which_gpus = [0, 1, 2, 3]
-max_worker_num = len(which_gpus) * 4
+max_worker_num = len(which_gpus) * 3
 
 BASE_COMMAND = "python -m alf.bin.train "
 COMMANDS = []
 environments = [
-    #"harvester_0.25",
-    #"harvester_0.50",
-    #"harvester_0.75",
+    "harvester_0.25",
+    "harvester_0.50",
+    "harvester_0.75",
     'harvester_0.05',
     'harvester_0.1',
     "topOff_0.05",
-    #"topOff_0.1",
-    #"topOff_0.25",
-    #"topOff_0.50",
-    #"topOff_0.75",
-    #"cleanHouse",
-    #"fourCorners"
-    #"stairClimber",
-    #"randomMaze"
+    "topOff_0.1",
+    "topOff_0.25",
+    "topOff_0.50",
+    "topOff_0.75",
+    "harvester",
+    "topOff",
+    "cleanHouse",
+    "fourCorners",
+    "stairClimber",
+    "randomMaze",
 ]
 for alg_type in ["global", "recurrent"]:
 #for alg_type in ["recurrent"]:
+#for alg_type in ["global"]:
     for environment in environments:
         for repeat in range(5):
                 COMMANDS.append(f"python -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_{alg_type}_{environment}.gin --root_dir ~/karel_rl_logs/best_param_{alg_type}_{environment}/{environment}_{repeat}")
+                #COMMANDS.append(f"python -m alf.bin.train --gin_file ~/alf/alf/examples/ppo_karel_{alg_type}_{environment}.gin --root_dir ~/karel_rl_logs/best_param_transpose_default_ppo_param_{alg_type}_{environment}/{environment}_{repeat}")
                 print(COMMANDS[-1])
 def _init_device_queue(max_worker_num):
     m = Manager()

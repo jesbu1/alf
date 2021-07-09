@@ -1,0 +1,14 @@
+{
+    "global: cleanHouse suite_karel_env.load.action_noise_prob=0.0": "0.0 (0.0)",
+    "global: fourCorners suite_karel_env.load.action_noise_prob=0.0": "0.25 (0.15811388300841897)",
+    "global: harvester suite_karel_env.load.action_noise_prob=0.0": "0.8277777314186097 (0.14423058238173592)",
+    "global: randomMaze suite_karel_env.load.action_noise_prob=0.0": "1.0 (0.0)",
+    "global: stairClimber suite_karel_env.load.action_noise_prob=0.0": "1.0 (0.0)",
+    "global: topOff suite_karel_env.load.action_noise_prob=0.0": "0.25036363005638124 (0.03811075336460706)",
+    "recurrent: cleanHouse suite_karel_env.load.action_noise_prob=0.0": "0.0 (0.0)",
+    "recurrent: fourCorners suite_karel_env.load.action_noise_prob=0.0": "0.6 (0.48989794855663565)",
+    "recurrent: harvester suite_karel_env.load.action_noise_prob=0.0": "0.4222222059965134 (0.17427096944072706)",
+    "recurrent: randomMaze suite_karel_env.load.action_noise_prob=0.0": "1.0 (0.0)",
+    "recurrent: stairClimber suite_karel_env.load.action_noise_prob=0.0": "0.15399999171495438 (0.19975984120206972)",
+    "recurrent: topOff suite_karel_env.load.action_noise_prob=0.0": "0.1081818200647831 (0.07720104179260596)"
+}
