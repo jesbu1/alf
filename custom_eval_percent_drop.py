@@ -27,6 +27,10 @@ def process_reward(string):
     if type(string) == float:
         return string
     return float(string.split(" ")[0])
+def process_sd(string):
+    if type(string) == float:
+        return string
+    return float(string.split(" ")[1][1:-1])
 with open(input_file, 'r') as f:
     results = json.load(f)
 for key, reward in results.items():
@@ -38,6 +42,7 @@ for key, reward in results.items():
     #    continue
     baseline_reward = process_reward(baseline_map[processed_key])
     processed_reward = process_reward(reward)
+    processed_std = process_sd(reward)
     # Calculate percent drop
     try:
         #if "stairClimber" in query_key and "harvester" in query_key:
@@ -46,7 +51,7 @@ for key, reward in results.items():
         percent_drop = (processed_reward - baseline_reward)/baseline_reward * 100
     except ZeroDivisionError:
         percent_drop = float("nan")
-    results[key] = f"{reward} {percent_drop:.3f}"
+    results[key] = f"{processed_reward:.2f} ({processed_std:.2f}) {percent_drop:.2f}%"
 
 save_name = input_file.replace('.json', '_percent.json')
 with open(save_name, "w") as f:
